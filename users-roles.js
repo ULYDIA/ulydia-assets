@@ -1,7 +1,7 @@
 /* users-roles.js — Ulydia (public asset)
-   - Expose: window.UlydiaUsersRoles.open({ token })
+   - Exposes: window.UlydiaUsersRoles.open(ctx)
    - No auto button injection
-   - Uses existing window.supabase (supabase-js v2) if present
+   - Reuses existing Supabase client (window.__ULYDIA_SUPABASE__) when possible
 */
 (() => {
   if (window.__ULYDIA_USERS_ROLES_V1__) return;
@@ -9,12 +9,12 @@
 
   const SUPABASE_URL = "https://zwnkscepqwujkcxusknn.supabase.co";
 
-  // ✅ Put your anon key here OR set it before loading script:
-  // window.ULYDIA_SUPABASE_ANON_KEY = "....";
+  // Prefer a single source of truth set in <head>:
+  // window.ULYDIA_SUPABASE_ANON_KEY = "..."
   const SUPABASE_ANON_KEY =
     (window.ULYDIA_SUPABASE_ANON_KEY || "").trim() ||
     (window.__ULYDIA_SUPABASE_ANON_KEY || "").trim() ||
-    ""; // keep empty if you already create the client elsewhere
+    "";
 
   const STORAGE_KEY = "ulydia_auth_v1";
 
@@ -58,27 +58,27 @@
     document.head.appendChild(style);
   }
 
-  function getSb() {
-    // Reuse the client created in your my-account script if available
+  function getSb(ctx) {
+    // 1) best: reuse the client from my-account
     if (window.__ULYDIA_SUPABASE__) return window.__ULYDIA_SUPABASE__;
 
-    // Or reuse an existing one
-    if (window.__ULYDIA_SUPABASE_CLIENT__) return window.__ULYDIA_SUPABASE_CLIENT__;
+    // 2) accept an injected client (optional)
+    if (ctx && ctx.supabase) return ctx.supabase;
 
-    // Or create if supabase-js v2 is loaded and anon key is provided
+    // 3) fallback: create a client ONLY if needed and key is available
     if (window.supabase?.createClient && SUPABASE_ANON_KEY) {
-      window.__ULYDIA_SUPABASE_CLIENT__ = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      window.__ULYDIA_SUPABASE_CLIENT__ ||= window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: STORAGE_KEY }
       });
       return window.__ULYDIA_SUPABASE_CLIENT__;
     }
+
     return null;
   }
 
   function openModal() {
     ensureCSS();
 
-    // close existing
     const old = $("#u_users_roles_overlay");
     if (old) old.remove();
 
@@ -123,13 +123,13 @@
     const modal = openModal();
     const token = String(ctx.token || "").trim();
 
-    const sb = getSb();
+    const sb = getSb(ctx);
     if (!sb) {
       modal.body.innerHTML = "";
-      modal.body.appendChild(el("div", { class: "uUR_err" }, "Supabase client not available. Load supabase-js v2 + provide anon key."));
+      modal.body.appendChild(el("div", { class: "uUR_err" }, "Supabase client not available. Please ensure supabase-js v2 is loaded and an anon key is configured."));
       modal.body.appendChild(el("div", { class: "uUR_box" }, [
         el("div", { class: "uUR_h" }, "Debug"),
-        el("div", { class: "uUR_code" }, "window.supabase?.createClient is missing OR anon key not set."),
+        el("div", { class: "uUR_code" }, "Missing window.__ULYDIA_SUPABASE__ and no anon key available to create a client.")
       ]));
       return;
     }
@@ -141,7 +141,7 @@
       modal.body.innerHTML = "";
       modal.body.appendChild(el("div", { class: "uUR_box" }, [
         el("div", { class: "uUR_h" }, "Session"),
-        el("div", { class: "uUR_p" }, session?.user?.email ? `Logged in as ${session.user.email}` : "No session found."),
+        el("div", { class: "uUR_p" }, session?.user?.email ? `Signed in as ${session.user.email}` : "No session found.")
       ]));
 
       modal.body.appendChild(el("div", { class: "uUR_box" }, [
@@ -153,12 +153,11 @@
         el("div", { class: "uUR_row" }, [
           el("div", {}, [
             el("div", { class: "uUR_h" }, "Next step"),
-            el("div", { class: "uUR_p" }, "Now we can plug: members list + invites + roles.")
+            el("div", { class: "uUR_p" }, "We can now connect: members list, invites, and role management.")
           ]),
           el("button", { class: "uUR_btn uUR_btnPrimary", type:"button", onclick: () => modal.close() }, "Close")
         ])
       ]));
-
     } catch (e) {
       modal.body.innerHTML = "";
       modal.body.appendChild(el("div", { class: "uUR_err" }, "Failed to load Users & Roles."));
@@ -169,62 +168,9 @@
     }
   }
 
-  // ✅ Expose API
+  // ✅ Expose API (ONLY ONCE)
   window.UlydiaUsersRoles = { open };
 
-
-// =========================================================
-// PUBLIC API (EXPORTED)
-// =========================================================
-window.UlydiaUsersRoles = {
-  open() {
-    ensureCSS();
-
-    // simple modal pour l’instant (safe)
-    const overlay = document.createElement("div");
-    overlay.style.cssText = `
-      position:fixed; inset:0; z-index:999999;
-      background:rgba(15,23,42,.45);
-      display:flex; align-items:center; justify-content:center;
-    `;
-
-    const card = document.createElement("div");
-    card.style.cssText = `
-      background:#fff;
-      border-radius:18px;
-      width:min(900px,96vw);
-      padding:24px;
-      box-shadow:0 20px 60px rgba(0,0,0,.25);
-      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
-    `;
-
-    card.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <h2 style="margin:0;font-size:20px">Users & Roles</h2>
-        <button id="u_close_users_roles"
-          style="border:0;background:#f1f5f9;border-radius:10px;padding:8px 12px;font-weight:700;cursor:pointer">
-          ✕
-        </button>
-      </div>
-
-      <div style="opacity:.8">
-        Module Users & Roles prêt techniquement.<br>
-        L’UI complète (invitations, rôles, permissions) arrive ensuite.
-      </div>
-    `;
-
-    overlay.appendChild(card);
-    document.body.appendChild(overlay);
-
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) overlay.remove();
-    });
-    card.querySelector("#u_close_users_roles").onclick = () => overlay.remove();
-  }
-};
-
-console.log("[Ulydia] Users & Roles ready");
-
-
-
+  console.log("[Ulydia] Users & Roles ready");
 })();
+
