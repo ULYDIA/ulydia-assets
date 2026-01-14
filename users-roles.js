@@ -1,25 +1,13 @@
-/* users-roles.js — Ulydia (public asset)
-   - Exposes: window.UlydiaUsersRoles.open(ctx)
-   - No auto button injection
-   - Reuses existing Supabase client (window.__ULYDIA_SUPABASE__) when possible
+/* users-roles.js — Ulydia Users & Roles (v1)
+   Usage: window.UlydiaUsersRoles.open({ supabase, token })
 */
-(() => {
-  if (window.__ULYDIA_USERS_ROLES_V1__) return;
-  window.__ULYDIA_USERS_ROLES_V1__ = true;
+(function () {
+  if (window.UlydiaUsersRoles?.open) return;
 
-  const SUPABASE_URL = "https://zwnkscepqwujkcxusknn.supabase.co";
-
-  // Prefer a single source of truth set in <head>:
-  // window.ULYDIA_SUPABASE_ANON_KEY = "..."
-  const SUPABASE_ANON_KEY =
-    (window.ULYDIA_SUPABASE_ANON_KEY || "").trim() ||
-    (window.__ULYDIA_SUPABASE_ANON_KEY || "").trim() ||
-    "";
-
-  const STORAGE_KEY = "ulydia_auth_v1";
-
-  // ---------------- tiny helpers ----------------
-  const $ = (s, r = document) => r.querySelector(s);
+  const UI = {
+    overlayId: "u_ur_overlay",
+    styleId: "u_ur_style",
+  };
 
   function el(tag, attrs = {}, children = []) {
     const n = document.createElement(tag);
@@ -36,141 +24,85 @@
     return n;
   }
 
-  function ensureCSS() {
-    if ($("#u_users_roles_css")) return;
-    const style = el("style", { id: "u_users_roles_css" });
-    style.textContent = `
-      .uUR_overlay{position:fixed;inset:0;z-index:999999;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:18px}
-      .uUR_card{width:min(980px,96vw);background:#fff;border:1px solid #e5e7eb;border-radius:18px;box-shadow:0 14px 40px rgba(15,23,42,.18);overflow:hidden}
-      .uUR_top{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #e5e7eb}
-      .uUR_title{font-size:20px;font-weight:900;color:#0f172a}
-      .uUR_close{width:44px;height:44px;border-radius:14px;border:1px solid #d1d5db;background:#fff;color:#2563eb;cursor:pointer}
-      .uUR_body{padding:18px}
-      .uUR_h{font-size:14px;font-weight:900;margin:0 0 10px;color:#0f172a}
-      .uUR_p{margin:0;opacity:.8;line-height:1.45}
-      .uUR_box{margin-top:14px;border:1px solid #e5e7eb;border-radius:14px;padding:14px;background:#fafafa}
-      .uUR_row{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-      .uUR_btn{display:inline-flex;align-items:center;justify-content:center;padding:10px 14px;border-radius:12px;border:1px solid #d1d5db;background:#fff;color:#0f172a;font-weight:900;font-size:13px;cursor:pointer}
-      .uUR_btnPrimary{background:#2563eb;color:#fff;border-color:#2563eb}
-      .uUR_err{padding:12px 14px;border-radius:12px;border:1px solid #fecaca;background:#fef2f2;color:#991b1b;font-weight:800}
-      .uUR_code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:12px;opacity:.85;word-break:break-all}
+  function injectStylesOnce() {
+    if (document.getElementById(UI.styleId)) return;
+    const css = `
+      #${UI.overlayId}{position:fixed;inset:0;z-index:999999;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:18px}
+      #${UI.overlayId} .card{width:min(1180px,96vw);background:#fff;border:1px solid #e5e7eb;border-radius:22px;box-shadow:0 24px 80px rgba(0,0,0,.25);overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+      #${UI.overlayId} .top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 18px;border-bottom:1px solid #eef2f7}
+      #${UI.overlayId} .title{font-size:28px;font-weight:900;letter-spacing:-.02em}
+      #${UI.overlayId} .xbtn{width:44px;height:44px;border-radius:14px;border:1px solid #e5e7eb;background:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+      #${UI.overlayId} .xbtn:hover{background:#f8fafc}
+      #${UI.overlayId} .body{padding:18px}
+      #${UI.overlayId} .grid{display:grid;grid-template-columns:1fr;gap:14px}
+      #${UI.overlayId} .panel{border:1px solid #e5e7eb;border-radius:18px;background:#fff;overflow:hidden}
+      #${UI.overlayId} .panel .ph{padding:14px 16px;border-bottom:1px solid #eef2f7;font-weight:900;font-size:18px}
+      #${UI.overlayId} .panel .pc{padding:14px 16px}
+      #${UI.overlayId} .muted{opacity:.75}
+      #${UI.overlayId} .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+      #${UI.overlayId} .tabs{display:flex;gap:10px;flex-wrap:wrap}
+      #${UI.overlayId} .tab{padding:10px 12px;border-radius:999px;border:1px solid #e5e7eb;background:#fff;font-weight:900;cursor:pointer}
+      #${UI.overlayId} .tab[data-active="1"]{background:#2563eb;border-color:#2563eb;color:#fff}
+      #${UI.overlayId} .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 12px;border-radius:12px;border:1px solid transparent;font-weight:900;cursor:pointer;background:#2563eb;color:#fff}
+      #${UI.overlayId} .btnGhost{background:#fff;color:#0f172a;border-color:#e5e7eb}
+      #${UI.overlayId} .btnDanger{background:#fff;color:#991b1b;border-color:#fecaca}
+      #${UI.overlayId} input, #${UI.overlayId} select{height:44px;border-radius:12px;border:1px solid #e5e7eb;padding:0 12px;font-weight:800;outline:none}
+      #${UI.overlayId} input:focus, #${UI.overlayId} select:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.15)}
+      #${UI.overlayId} table{width:100%;border-collapse:collapse}
+      #${UI.overlayId} th{font-size:12px;text-transform:uppercase;letter-spacing:.02em;opacity:.7;text-align:left;padding:12px 0;border-bottom:1px solid #eef2f7}
+      #${UI.overlayId} td{padding:14px 0;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+      #${UI.overlayId} .pill{display:inline-flex;padding:6px 10px;border-radius:999px;border:1px solid #e5e7eb;font-weight:900;font-size:12px}
+      #${UI.overlayId} .err{padding:12px 14px;border-radius:14px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-weight:900}
+      #${UI.overlayId} .ok{padding:12px 14px;border-radius:14px;background:#ecfdf5;border:1px solid #bbf7d0;color:#065f46;font-weight:900}
+      @media (min-width: 980px){ #${UI.overlayId} .grid{grid-template-columns:1.1fr .9fr} }
     `;
-    document.head.appendChild(style);
+    const st = document.createElement("style");
+    st.id = UI.styleId;
+    st.textContent = css;
+    document.head.appendChild(st);
   }
 
-  function getSb(ctx) {
-    // 1) best: reuse the client from my-account
-    if (window.__ULYDIA_SUPABASE__) return window.__ULYDIA_SUPABASE__;
-
-    // 2) accept an injected client (optional)
-    if (ctx && ctx.supabase) return ctx.supabase;
-
-    // 3) fallback: create a client ONLY if needed and key is available
-    if (window.supabase?.createClient && SUPABASE_ANON_KEY) {
-      window.__ULYDIA_SUPABASE_CLIENT__ ||= window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: STORAGE_KEY }
-      });
-      return window.__ULYDIA_SUPABASE_CLIENT__;
-    }
-
-    return null;
+  function iconX() {
+    return `
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
+      </svg>`;
   }
 
-  function openModal() {
-    ensureCSS();
+  function normEmail(s){ return String(s||"").trim().toLowerCase(); }
 
-    const old = $("#u_users_roles_overlay");
-    if (old) old.remove();
-
-    const overlay = el("div", { class: "uUR_overlay", id: "u_users_roles_overlay" });
-    const card = el("div", { class: "uUR_card" });
-
-    const close = () => overlay.remove();
-
-    const top = el("div", { class: "uUR_top" }, [
-      el("div", { class: "uUR_title" }, "Users & Roles"),
-      (() => {
-        const b = el("button", { class: "uUR_close", type: "button" }, "✕");
-        b.addEventListener("click", close);
-        return b;
-      })()
-    ]);
-
-    const body = el("div", { class: "uUR_body" }, [
-      el("div", { class: "uUR_box" }, [
-        el("div", { class: "uUR_h" }, "Loading…"),
-        el("div", { class: "uUR_p" }, "Fetching session & company context.")
-      ])
-    ]);
-
-    card.appendChild(top);
-    card.appendChild(body);
-    overlay.appendChild(card);
-
-    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
-    document.addEventListener("keydown", function onKey(e){
-      if (e.key === "Escape") {
-        document.removeEventListener("keydown", onKey);
-        close();
-      }
-    });
-
-    document.body.appendChild(overlay);
-    return { overlay, body, close };
-  }
-
-  async function open(ctx = {}) {
-    const modal = openModal();
-    const token = String(ctx.token || "").trim();
-
-    const sb = getSb(ctx);
-    if (!sb) {
-      modal.body.innerHTML = "";
-      modal.body.appendChild(el("div", { class: "uUR_err" }, "Supabase client not available. Please ensure supabase-js v2 is loaded and an anon key is configured."));
-      modal.body.appendChild(el("div", { class: "uUR_box" }, [
-        el("div", { class: "uUR_h" }, "Debug"),
-        el("div", { class: "uUR_code" }, "Missing window.__ULYDIA_SUPABASE__ and no anon key available to create a client.")
-      ]));
-      return;
-    }
-
-    try {
-      const { data } = await sb.auth.getSession();
-      const session = data?.session;
-
-      modal.body.innerHTML = "";
-      modal.body.appendChild(el("div", { class: "uUR_box" }, [
-        el("div", { class: "uUR_h" }, "Session"),
-        el("div", { class: "uUR_p" }, session?.user?.email ? `Signed in as ${session.user.email}` : "No session found.")
-      ]));
-
-      modal.body.appendChild(el("div", { class: "uUR_box" }, [
-        el("div", { class: "uUR_h" }, "Dashboard token"),
-        el("div", { class: "uUR_code" }, token || "—")
-      ]));
-
-      modal.body.appendChild(el("div", { class: "uUR_box" }, [
-        el("div", { class: "uUR_row" }, [
-          el("div", {}, [
-            el("div", { class: "uUR_h" }, "Next step"),
-            el("div", { class: "uUR_p" }, "We can now connect: members list, invites, and role management.")
-          ]),
-          el("button", { class: "uUR_btn uUR_btnPrimary", type:"button", onclick: () => modal.close() }, "Close")
-        ])
-      ]));
-    } catch (e) {
-      modal.body.innerHTML = "";
-      modal.body.appendChild(el("div", { class: "uUR_err" }, "Failed to load Users & Roles."));
-      modal.body.appendChild(el("div", { class: "uUR_box" }, [
-        el("div", { class: "uUR_h" }, "Error"),
-        el("div", { class: "uUR_code" }, String(e?.message || e))
-      ]));
+  async function safeSession(sb){
+    try{
+      const { data, error } = await sb.auth.getSession();
+      if (error) return { session:null, error };
+      return { session:data?.session || null, error:null };
+    } catch(e){
+      return { session:null, error:e };
     }
   }
 
-  // ✅ Expose API (ONLY ONCE)
-  window.UlydiaUsersRoles = { open };
+  async function getCompanyByToken(sb, token){
+    const t = String(token||"").trim();
+    if (!t) throw new Error("Missing token");
+    const res = await sb
+      .from("companies")
+      .select("id,name,slug,manage_token,created_at")
+      .eq("manage_token", t)
+      .maybeSingle();
+    if (res.error) throw res.error;
+    if (!res.data?.id) throw new Error("Company not found for token");
+    return res.data;
+  }
 
-  console.log("[Ulydia] Users & Roles ready");
-})();
+  async function listMembers(sb, companyId){
+    // Try to pick email if you have it; fallback on user_id.
+    // Recommended column: company_members.user_email
+    const res = await sb
+      .from("company_members")
+      .select("id,user_id,user_email,role,created_at")
+      .eq("company_id", companyId)
+      .order("created_at", { ascending: true });
+    if (res.error) throw res.error;
+    return Array.isArray(res
 
