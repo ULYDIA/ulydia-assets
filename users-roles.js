@@ -196,7 +196,7 @@
 
     let is_admin = false;
     if (company_id) {
-      const { data: isAdmin, error: e2 } = await sb.rpc("is_company_admin", { p_company_id: company_id });
+      const { data: isAdmin, error: e2 } = await sb.rpc("is_company_admin", { cid: companyId });
       if (e2) throw e2;
       is_admin = !!isAdmin;
     }
