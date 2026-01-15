@@ -1,7 +1,10 @@
-/* users-roles.js — Ulydia (PATCHED, tokenless, single Supabase client)
+/* users-roles.js — Ulydia (PATCHED v3.1, tokenless, single Supabase client)
    - Reuses existing global Supabase client (prevents "Multiple GoTrueClient instances")
    - Works WITHOUT dashboard token when user is authenticated (RLS-driven)
    - Always releases overlay (no more frozen page)
+   - Uses RPC create_company_invite (as requested)
+   - Adds hard anti-duplicate guard for invites (prevents "rafale")
+   - Fixes getContext() (companyId typo, RPC param names, RPC fallback)
    - Exposes window.UlydiaUsersRoles.open() + window.UsersRoles.open() (compat)
 */
 (() => {
@@ -13,7 +16,6 @@
   // ---------- Small helpers ----------
   const qs = (sel, root = document) => root.querySelector(sel);
   const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function log(...a){ console.log(NS, ...a); }
   function warn(...a){ console.warn(NS, ...a); }
@@ -27,19 +29,15 @@
     // 2) Common alternates (if you named it differently)
     if (window._ULYDIA_SUPABASE_) return window._ULYDIA_SUPABASE_;
 
-    // 3) If none exists, we can create one ONLY IF config is provided.
-    //    But recommended: you create it ONCE in my-account and expose __ULYDIA_SUPABASE__.
+    // 3) Last resort: create one ONLY IF config is provided
     const cfg = window.ULYDIA_USERS_ROLES_CONFIG || window.__ULYDIA_CONFIG__ || {};
     const SUPABASE_URL = cfg.SUPABASE_URL;
     const SUPABASE_ANON_KEY = cfg.SUPABASE_ANON_KEY;
 
     if (!SUPABASE_URL) throw new Error("Missing config: SUPABASE_URL (create global __ULYDIA_SUPABASE__ or set window.ULYDIA_USERS_ROLES_CONFIG.SUPABASE_URL)");
     if (!SUPABASE_ANON_KEY) throw new Error("Missing config: SUPABASE_ANON_KEY (create global __ULYDIA_SUPABASE__ or set window.ULYDIA_USERS_ROLES_CONFIG.SUPABASE_ANON_KEY)");
-
-    // Create (last resort)
     if (!window.supabase?.createClient) throw new Error("Supabase JS not loaded (window.supabase.createClient missing).");
 
-    // IMPORTANT: use SAME storage key as your main auth script if you do this (but again: avoid creating a 2nd client)
     const storageKey = cfg.STORAGE_KEY || "ulydia_auth_v1";
     const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       auth: { storageKey, persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
@@ -182,23 +180,56 @@
   }
 
   // ---------- Data layer (RLS-first, tokenless) ----------
+  async function rpcMyCompanyIds(sb) {
+    // Fallbacks depending on what exists / schema cache
+    // - my_company_ids_arr() → returns uuid[]
+    // - my_company_ids()     → could return setof uuid / uuid[]
+    let lastErr = null;
+
+    for (const fn of ["my_company_ids_arr", "my_company_ids"]) {
+      try {
+        const { data, error } = await sb.rpc(fn);
+        if (error) throw error;
+
+        // normalize to array of uuid strings
+        if (Array.isArray(data)) return data;
+        if (data == null) return [];
+        // Sometimes PostgREST returns scalar for single row; normalize
+        return [data];
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error("Could not load company ids (no RPC found).");
+  }
+
+  async function rpcIsCompanyAdmin(sb, company_id) {
+    // Try with correct param name first, then fallback to cid
+    let lastErr = null;
+
+    for (const payload of [{ p_company_id: company_id }, { cid: company_id }]) {
+      try {
+        const { data, error } = await sb.rpc("is_company_admin", payload);
+        if (error) throw error;
+        return !!data;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw lastErr || new Error("Could not check admin status.");
+  }
+
   async function getContext(sb) {
     const { data: { user }, error } = await sb.auth.getUser();
     if (error) throw error;
     if (!user) return { user: null, company_id: null, is_admin: false, my_companies: [] };
 
-    // RLS-first: ask DB what companies this user belongs to.
-    const { data: myCompanies, error: e1 } = await sb.rpc("my_company_ids");
-    if (e1) throw e1;
-
-    const my_companies = Array.isArray(myCompanies) ? myCompanies : [];
-    const company_id = my_companies[0] || null; // if multiple: take first (you can improve later with a company switcher)
+    const my_companies = await rpcMyCompanyIds(sb);
+    const company_id = my_companies[0] || null;
 
     let is_admin = false;
     if (company_id) {
-      const { data: isAdmin, error: e2 } = await sb.rpc("is_company_admin", { cid: companyId });
-      if (e2) throw e2;
-      is_admin = !!isAdmin;
+      is_admin = await rpcIsCompanyAdmin(sb, company_id);
     }
 
     return { user, company_id, is_admin, my_companies };
@@ -247,12 +278,17 @@
     if (error) throw error;
   }
 
-  async function createInvite(sb, company_id, email, role) {
-    const { error } = await sb
-      .from("company_invites")
-      .insert({ company_id, email, role, status: "pending" });
+  // ✅ Uses RPC create_company_invite (as requested)
+  async function createInviteRPC(sb, company_id, email, role) {
+    const p_email = String(email || "").trim().toLowerCase();
+    const p_role = String(role || "member").trim();
+    const p_company_id = company_id;
 
+    const { data, error } = await sb.rpc("create_company_invite", { p_email, p_role, p_company_id });
     if (error) throw error;
+
+    // data may be token/uuid or null depending on your function
+    return data;
   }
 
   async function cancelInvite(sb, invite_id) {
@@ -286,13 +322,10 @@
         </td>
       `;
 
-      // Permissions:
       const canEdit = ctx.is_admin;
-      qsa("button", tr).forEach((b) => {
-        if (!canEdit) b.disabled = true;
-      });
+      qsa("button", tr).forEach((b) => { if (!canEdit) b.disabled = true; });
 
-      // You can’t remove yourself (safety)
+      // You can’t remove yourself
       if (String(m.user_id) === String(me)) {
         const btnRemove = qs('button[data-act="remove"]', tr);
         if (btnRemove) btnRemove.disabled = true;
@@ -302,6 +335,14 @@
         const btn = e.target.closest("button[data-act]");
         if (!btn) return;
         if (!ctx.is_admin) return;
+
+        // ✅ stop bubbling to avoid weird double-trigger in some layouts
+        e.preventDefault();
+        e.stopPropagation();
+
+        // ✅ anti double click on action buttons
+        if (btn.dataset.loading === "1") return;
+        btn.dataset.loading = "1";
 
         const act = btn.dataset.act;
 
@@ -325,6 +366,7 @@
           err(ex);
           setMsg("err", ex?.message || String(ex));
         } finally {
+          btn.dataset.loading = "0";
           btn.disabled = false;
         }
       });
@@ -357,14 +399,18 @@
       `;
 
       const canEdit = ctx.is_admin;
-      qsa("button", tr).forEach((b) => {
-        if (!canEdit) b.disabled = true;
-      });
+      qsa("button", tr).forEach((b) => { if (!canEdit) b.disabled = true; });
 
       tr.addEventListener("click", async (e) => {
         const btn = e.target.closest("button[data-act]");
         if (!btn) return;
         if (!ctx.is_admin) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (btn.dataset.loading === "1") return;
+        btn.dataset.loading = "1";
 
         try {
           setMsg("ok", "");
@@ -376,6 +422,7 @@
           err(ex);
           setMsg("err", ex?.message || String(ex));
         } finally {
+          btn.dataset.loading = "0";
           btn.disabled = false;
         }
       });
@@ -403,21 +450,12 @@
   async function open() {
     const { modal, close } = createModal();
 
-    // tab switching
     qsa(".u-ur-tab", modal).forEach((b) => {
       b.addEventListener("click", () => setTab(modal, b.dataset.tab));
     });
 
-    // IMPORTANT: never freeze page — always close overlay on fatal
     try {
       const sb = getSupabase();
-
-      // Store api bindings for render handlers
-      window.UlydiaUsersRoles._api = {
-        upsertMemberRole: (user_id, role, user_email) => upsertMemberRole(sb, window.UlydiaUsersRoles._ctx.company_id, user_id, role, user_email),
-        removeMember: (user_id) => removeMember(sb, window.UlydiaUsersRoles._ctx.company_id, user_id),
-        cancelInvite: (invite_id) => cancelInvite(sb, invite_id),
-      };
 
       // Load ctx (tokenless, auth-based)
       const ctx = await getContext(sb);
@@ -425,9 +463,45 @@
       window.UlydiaUsersRoles._ctx = ctx;
       window.UlydiaUsersRoles._modal = modal;
 
+      // Store api bindings for render handlers
+      window.UlydiaUsersRoles._api = {
+        upsertMemberRole: (user_id, role, user_email) =>
+          upsertMemberRole(sb, window.UlydiaUsersRoles._ctx.company_id, user_id, role, user_email),
+        removeMember: (user_id) =>
+          removeMember(sb, window.UlydiaUsersRoles._ctx.company_id, user_id),
+        cancelInvite: (invite_id) =>
+          cancelInvite(sb, invite_id),
+
+        // ✅ expose createInvite too (debug)
+        createInvite: (email, role) =>
+          createInviteRPC(sb, window.UlydiaUsersRoles._ctx.company_id, email, role),
+      };
+
+      // ✅ HARD GUARD (anti “rafale”) at API level
+      if (!window.UlydiaUsersRoles._api.__inviteGuardPatched) {
+        window.UlydiaUsersRoles._api.__inviteGuardPatched = true;
+
+        const original = window.UlydiaUsersRoles._api.createInvite.bind(window.UlydiaUsersRoles._api);
+        let inFlightKey = null;
+
+        window.UlydiaUsersRoles._api.createInvite = async (email, role) => {
+          const e = String(email || "").trim().toLowerCase();
+          const r = String(role || "").trim();
+          const key = `${e}|${r}`;
+
+          if (inFlightKey === key) return null; // ignore duplicate in-flight
+          inFlightKey = key;
+          try {
+            return await original(e, r);
+          } finally {
+            inFlightKey = null;
+          }
+        };
+      }
+
       if (!ctx.user) {
         setMsg("err", "You must be logged in to manage users.");
-        return; // modal stays open; user can close
+        return;
       }
 
       if (!ctx.company_id) {
@@ -443,26 +517,56 @@
 
       // Invite button
       const inviteBtn = qs("#u_ur_invite_btn", modal);
-      inviteBtn.addEventListener("click", async () => {
-        if (!ctx.is_admin) return;
-        const email = (qs("#u_ur_invite_email", modal).value || "").trim().toLowerCase();
-        const role  = (qs("#u_ur_invite_role", modal).value || "member").trim();
-        if (!email) return setMsg("err", "Please enter an email.");
 
-        try {
-          inviteBtn.disabled = true;
-          setMsg("ok", "");
-          await createInvite(sb, ctx.company_id, email, role);
-          setMsg("ok", `Invite sent to ${email} (${role}).`);
-          qs("#u_ur_invite_email", modal).value = "";
-          await window.UlydiaUsersRoles.refresh();
-        } catch (ex) {
-          err(ex);
-          setMsg("err", ex?.message || String(ex));
-        } finally {
-          inviteBtn.disabled = false;
-        }
-      });
+      // ✅ bind once per modal instance
+      if (!inviteBtn.dataset.bound) {
+        inviteBtn.dataset.bound = "1";
+
+        inviteBtn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+
+          if (!ctx.is_admin) return;
+
+          // ✅ anti double click
+          if (inviteBtn.dataset.loading === "1") return;
+          inviteBtn.dataset.loading = "1";
+
+          const email = (qs("#u_ur_invite_email", modal).value || "").trim().toLowerCase();
+          const role  = (qs("#u_ur_invite_role", modal).value || "member").trim();
+
+          if (!email) {
+            inviteBtn.dataset.loading = "0";
+            return setMsg("err", "Please enter an email.");
+          }
+
+          try {
+            inviteBtn.disabled = true;
+            setMsg("ok", "");
+
+            const result = await window.UlydiaUsersRoles._api.createInvite(email, role);
+
+            // result may be token/uuid or null depending on your RPC
+            setMsg("ok", `Invite sent to ${email} (${role}).`);
+            qs("#u_ur_invite_email", modal).value = "";
+
+            await window.UlydiaUsersRoles.refresh();
+          } catch (ex) {
+            err(ex);
+
+            // Friendly duplicate message
+            const msg = ex?.message || String(ex);
+            if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("already exists")) {
+              setMsg("err", `Invite already exists for ${email}.`);
+            } else {
+              setMsg("err", msg);
+            }
+          } finally {
+            inviteBtn.dataset.loading = "0";
+            inviteBtn.disabled = false;
+          }
+        });
+      }
 
       // Initial load
       await window.UlydiaUsersRoles.refresh();
@@ -470,12 +574,9 @@
     } catch (ex) {
       err(ex);
       setMsg("err", ex?.message || String(ex));
-
-      // If you prefer: auto-close on fatal init error
-      // close();
+      // keep modal open so user can close manually
     }
 
-    // expose close if needed
     return { close };
   }
 
@@ -503,7 +604,6 @@
   const api = {
     open,
     refresh,
-    // debug helpers
     _sb: null,
     _ctx: null,
     _modal: null,
@@ -511,9 +611,7 @@
   };
 
   window.UlydiaUsersRoles = api;
-  // compat alias (au cas où ton code appelle autre chose)
   window.UsersRoles = api;
 
-  log("loaded (v3). Call UlydiaUsersRoles.open()");
+  log("loaded (v3.1). Call UlydiaUsersRoles.open()");
 })();
-
