@@ -216,22 +216,57 @@ async function rpcMyCompanyIds(sb, user) {
   }
 }
 
+async function getMyCompanyRows(sb, userId) {
+  const { data, error } = await sb
+    .from("company_members")
+    .select("company_id, role, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: true });
 
-  async function getContext(sb) {
-    const { data: { user }, error } = await sb.auth.getUser();
+  if (error) throw error;
+  return data || [];
+}
+
+async function rpcIsCompanyAdmin(sb, company_id) {
+  // Optionnel : si tu as la RPC exposée, on l’utilise.
+  // Sinon, on retourne null (et on ne bloque jamais)
+  try {
+    // IMPORTANT: ton paramètre côté SQL doit être p_company_id (pas cid)
+    const { data, error } = await sb.rpc("is_company_admin", { p_company_id: company_id });
     if (error) throw error;
-    if (!user) return { user: null, company_id: null, is_admin: false, my_companies: [] };
-
-    const my_companies = await rpcMyCompanyIds(sb, user);
-    const company_id = my_companies[0] || null;
-
-    let is_admin = false;
-    if (company_id) {
-      is_admin = await rpcIsCompanyAdmin(sb, company_id);
-    }
-
-    return { user, company_id, is_admin, my_companies };
+    return !!data;
+  } catch (e) {
+    return null;
   }
+}
+
+
+
+
+async function getContext(sb) {
+  const { data: { user }, error } = await sb.auth.getUser();
+  if (error) throw error;
+  if (!user) return { user: null, company_id: null, is_admin: false, my_companies: [] };
+
+  // ✅ Source of truth: company_members
+  const rows = await getMyCompanyRows(sb, user.id);
+
+  const my_companies = rows.map(r => r.company_id).filter(Boolean);
+  const company_id = my_companies[0] || null;
+
+  // ✅ Admin simple & robuste (sans RPC) : rôle dans company_members
+  const myRole = rows.find(r => String(r.company_id) === String(company_id))?.role || null;
+  let is_admin = (myRole === "admin");
+
+  // (optionnel) si RPC dispo, elle peut confirmer (sans casser si absente)
+  if (company_id) {
+    const rpcVal = await rpcIsCompanyAdmin(sb, company_id);
+    if (rpcVal !== null) is_admin = rpcVal;
+  }
+
+  return { user, company_id, is_admin, my_companies };
+}
+
 
   async function loadMembers(sb, company_id) {
     const { data, error } = await sb
