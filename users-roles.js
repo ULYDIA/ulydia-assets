@@ -1,713 +1,519 @@
-/* ============================================================================
- * Ulydia — Users & Roles (Supabase-first, legacy-token compatible)
- * - No URL token required if user is authenticated
- * - Resolves company + manage_token via RLS
- * - Does NOT assume company_members.id exists
- * ========================================================================== */
+/* users-roles.js — Ulydia (PATCHED, tokenless, single Supabase client)
+   - Reuses existing global Supabase client (prevents "Multiple GoTrueClient instances")
+   - Works WITHOUT dashboard token when user is authenticated (RLS-driven)
+   - Always releases overlay (no more frozen page)
+   - Exposes window.UlydiaUsersRoles.open() + window.UsersRoles.open() (compat)
+*/
 (() => {
-  if (window.__ULYDIA_USERS_ROLES_V1__) return;
-  window.__ULYDIA_USERS_ROLES_V1__ = true;
+  if (window.__ULYDIA_USERS_ROLES_V3__) return;
+  window.__ULYDIA_USERS_ROLES_V3__ = true;
 
-  // ----------------------------
-  // Default CONFIG (can be overridden by window.ULYDIA_USERS_ROLES_CONFIG)
-  // ----------------------------
-  const DEFAULTS = {
-    SUPABASE_URL: "",
-    SUPABASE_ANON_KEY: "",
-    TOKEN_KEYS: ["ULYDIA_MANAGE_TOKEN", "ulydia_manage_token_v1"],
-    // Optional: selector of the button that opens the modal
-    OPEN_BUTTON_SELECTOR: '[data-ulydia-action="manage-users"], .u-manage-users, #u_manage_users',
-    // Optional: where to append modal
-    MODAL_APPEND_TO: "body",
-    // If your dashboard uses this worker token for other calls, we expose it on window
-    EXPOSE_TOKEN_ON_WINDOW: true,
-    DEBUG: false,
-  };
+  const NS = "[Users&Roles]";
 
-  const CFG = { ...DEFAULTS, ...(window.ULYDIA_USERS_ROLES_CONFIG || {}) };
+  // ---------- Small helpers ----------
+  const qs = (sel, root = document) => root.querySelector(sel);
+  const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  // ----------------------------
-  // Utilities
-  // ----------------------------
-  const log = (...a) => CFG.DEBUG && console.log("[Users&Roles]", ...a);
-  const warn = (...a) => console.warn("[Users&Roles]", ...a);
+  function log(...a){ console.log(NS, ...a); }
+  function warn(...a){ console.warn(NS, ...a); }
+  function err(...a){ console.error(NS, ...a); }
 
-  const qp = (name) => new URLSearchParams(location.search).get(name);
+  // ---------- Get the SINGLE Supabase client ----------
+  function getSupabase() {
+    // 1) Prefer the client created by your my-account script
+    if (window.__ULYDIA_SUPABASE__) return window.__ULYDIA_SUPABASE__;
 
-  function must(val, name) {
-    if (!val) throw new Error(`Missing config: ${name}`);
-    return val;
+    // 2) Common alternates (if you named it differently)
+    if (window._ULYDIA_SUPABASE_) return window._ULYDIA_SUPABASE_;
+
+    // 3) If none exists, we can create one ONLY IF config is provided.
+    //    But recommended: you create it ONCE in my-account and expose __ULYDIA_SUPABASE__.
+    const cfg = window.ULYDIA_USERS_ROLES_CONFIG || window.__ULYDIA_CONFIG__ || {};
+    const SUPABASE_URL = cfg.SUPABASE_URL;
+    const SUPABASE_ANON_KEY = cfg.SUPABASE_ANON_KEY;
+
+    if (!SUPABASE_URL) throw new Error("Missing config: SUPABASE_URL (create global __ULYDIA_SUPABASE__ or set window.ULYDIA_USERS_ROLES_CONFIG.SUPABASE_URL)");
+    if (!SUPABASE_ANON_KEY) throw new Error("Missing config: SUPABASE_ANON_KEY (create global __ULYDIA_SUPABASE__ or set window.ULYDIA_USERS_ROLES_CONFIG.SUPABASE_ANON_KEY)");
+
+    // Create (last resort)
+    if (!window.supabase?.createClient) throw new Error("Supabase JS not loaded (window.supabase.createClient missing).");
+
+    // IMPORTANT: use SAME storage key as your main auth script if you do this (but again: avoid creating a 2nd client)
+    const storageKey = cfg.STORAGE_KEY || "ulydia_auth_v1";
+    const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { storageKey, persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    });
+
+    window.__ULYDIA_SUPABASE__ = client;
+    return client;
   }
 
-  function el(tag, attrs = {}, children = []) {
-    const n = document.createElement(tag);
-    Object.entries(attrs).forEach(([k, v]) => {
-      if (k === "style") n.style.cssText = v;
-      else if (k === "class") n.className = v;
-      else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
-      else if (v !== null && v !== undefined) n.setAttribute(k, String(v));
-    });
-    (Array.isArray(children) ? children : [children]).forEach((c) => {
-      if (c === null || c === undefined) return;
-      if (typeof c === "string") n.appendChild(document.createTextNode(c));
-      else n.appendChild(c);
-    });
-    return n;
-  }
-
-  function cssOnce() {
+  // ---------- UI (modal + overlay) ----------
+  function mountStyles() {
     if (document.getElementById("u_users_roles_css")) return;
-    const style = el("style", { id: "u_users_roles_css" });
-    style.textContent = `
-      .u-ur-overlay{ position:fixed; inset:0; background:rgba(15,23,42,.55); z-index:999999; display:none; align-items:center; justify-content:center; padding:24px;}
-      .u-ur-modal{ width:min(1100px, 96vw); background:#fff; border-radius:18px; box-shadow:0 25px 70px rgba(0,0,0,.25); overflow:hidden; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;}
-      .u-ur-head{ display:flex; align-items:flex-start; justify-content:space-between; padding:26px 28px 18px; border-bottom:1px solid #e5e7eb;}
-      .u-ur-title{ font-size:40px; line-height:1.05; letter-spacing:-.02em; font-weight:800; margin:0; color:#0f172a;}
-      .u-ur-sub{ margin:8px 0 0; color:#64748b; font-weight:600;}
-      .u-ur-x{ width:48px; height:48px; border-radius:14px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center;}
-      .u-ur-body{ padding:22px 28px 26px;}
-      .u-ur-card{ border:1px solid #e5e7eb; border-radius:18px; overflow:hidden; }
-      .u-ur-cardhead{ display:flex; align-items:center; justify-content:space-between; padding:18px 18px; border-bottom:1px solid #eef2f7;}
-      .u-ur-cardtitle{ font-size:22px; font-weight:800; color:#0f172a; }
-      .u-ur-tabs{ display:flex; gap:10px; }
-      .u-ur-tab{ padding:10px 16px; border-radius:999px; border:1px solid #e5e7eb; background:#fff; font-weight:800; cursor:pointer; color:#0f172a; }
-      .u-ur-tab.is-active{ background:#2563eb; color:#fff; border-color:#2563eb; }
-      .u-ur-section{ padding:18px; }
-      .u-ur-banner{ margin:14px 0; padding:14px 14px; border-radius:14px; border:1px solid #fecaca; background:#fef2f2; color:#991b1b; font-weight:800; }
-      .u-ur-row{ display:grid; grid-template-columns: 1.8fr .7fr .8fr; gap:12px; align-items:center; padding:12px 12px; border:1px solid #eef2f7; border-radius:14px; margin:10px 0; }
-      .u-ur-row strong{ color:#0f172a;}
-      .u-ur-pill{ display:inline-flex; padding:6px 10px; border-radius:999px; border:1px solid #e5e7eb; font-weight:800; color:#0f172a; background:#fff; }
-      .u-ur-actions{ display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; }
-      .u-ur-btn{ padding:10px 12px; border-radius:12px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; font-weight:800; }
-      .u-ur-btn.primary{ background:#2563eb; color:#fff; border-color:#2563eb; }
-      .u-ur-btn.danger{ background:#fff; color:#b91c1c; border-color:#fecaca; }
-      .u-ur-form{ display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 6px;}
-      .u-ur-input, .u-ur-select{ padding:10px 12px; border-radius:12px; border:1px solid #e5e7eb; outline:none; font-weight:700; }
-      .u-ur-input{ min-width:280px; flex:1; }
-      .u-ur-muted{ color:#64748b; font-weight:700; }
-      .u-ur-kv{ display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin:14px 0 8px; }
-      .u-ur-kvbox{ border:1px solid #eef2f7; border-radius:16px; padding:16px; }
-      .u-ur-kvbox h4{ margin:0 0 6px; font-size:14px; letter-spacing:.02em; color:#64748b; text-transform:uppercase; }
-      .u-ur-kvbox .val{ font-size:16px; font-weight:900; color:#0f172a; word-break:break-all;}
-      @media (max-width: 760px){
-        .u-ur-title{ font-size:30px; }
-        .u-ur-row{ grid-template-columns: 1fr; }
-        .u-ur-actions{ justify-content:flex-start; }
-      }
+    const s = document.createElement("style");
+    s.id = "u_users_roles_css";
+    s.textContent = `
+      .u-ur-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:999998;}
+      .u-ur-modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(980px,92vw);max-height:86vh;overflow:auto;background:#fff;border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.25);z-index:999999;padding:24px;}
+      .u-ur-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;border-bottom:1px solid #edf0f5;padding-bottom:14px;margin-bottom:18px;}
+      .u-ur-title{font-size:32px;line-height:1.1;margin:0;color:#101828;font-weight:800;}
+      .u-ur-sub{margin:6px 0 0;color:#667085;font-size:15px;font-weight:600;}
+      .u-ur-close{border:1px solid #e4e7ec;background:#fff;border-radius:14px;width:44px;height:44px;cursor:pointer;font-size:22px;line-height:1;}
+      .u-ur-card{border:1px solid #e6ebf2;border-radius:18px;padding:18px;}
+      .u-ur-row{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+      .u-ur-tabs{display:flex;gap:10px;}
+      .u-ur-tab{border:1px solid #d0d5dd;background:#fff;border-radius:999px;padding:10px 16px;font-weight:800;cursor:pointer;color:#101828;}
+      .u-ur-tab[aria-selected="true"]{background:#2563eb;border-color:#2563eb;color:#fff;}
+      .u-ur-msg{margin-top:14px;border-radius:14px;padding:12px 14px;font-weight:800;}
+      .u-ur-msg.err{background:#fff1f2;border:1px solid #fecdd3;color:#9f1239;}
+      .u-ur-msg.ok{background:#ecfdf3;border:1px solid #abefc6;color:#027a48;}
+      .u-ur-table{width:100%;border-collapse:collapse;margin-top:12px;}
+      .u-ur-table th,.u-ur-table td{border-bottom:1px solid #eef2f7;padding:10px 8px;text-align:left;font-size:14px;}
+      .u-ur-table th{color:#667085;font-weight:900;font-size:12px;text-transform:uppercase;letter-spacing:.04em;}
+      .u-ur-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+      .u-ur-btn{border:1px solid #d0d5dd;background:#fff;border-radius:12px;padding:8px 12px;font-weight:900;cursor:pointer;}
+      .u-ur-btn.primary{background:#111827;color:#fff;border-color:#111827;}
+      .u-ur-btn.danger{background:#fff;border-color:#fecaca;color:#b91c1c;}
+      .u-ur-input{border:1px solid #d0d5dd;border-radius:12px;padding:10px 12px;font-weight:700;width:min(420px,100%);}
+      .u-ur-inline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px;}
+      .u-ur-muted{color:#667085;font-weight:700;}
     `;
-    document.head.appendChild(style);
+    document.head.appendChild(s);
   }
 
-  // ----------------------------
-  // Supabase loader (if not already present)
-  // ----------------------------
-  async function ensureSupabaseClient() {
-    must(CFG.SUPABASE_URL, "SUPABASE_URL");
-    must(CFG.SUPABASE_ANON_KEY, "SUPABASE_ANON_KEY");
+  function createModal() {
+    mountStyles();
 
-    // If user already included supabase-js v2
-    if (window.supabase && typeof window.supabase.createClient === "function") {
-      return window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+    const backdrop = document.createElement("div");
+    backdrop.className = "u-ur-backdrop";
+    backdrop.id = "u_ur_backdrop";
+
+    const modal = document.createElement("div");
+    modal.className = "u-ur-modal";
+    modal.id = "u_ur_modal";
+
+    modal.innerHTML = `
+      <div class="u-ur-head">
+        <div>
+          <h2 class="u-ur-title">Users & Roles</h2>
+          <div class="u-ur-sub">Manage access for your company</div>
+        </div>
+        <button class="u-ur-close" aria-label="Close">×</button>
+      </div>
+
+      <div class="u-ur-card">
+        <div class="u-ur-row">
+          <div>
+            <div style="font-size:22px;font-weight:900;color:#101828;">Manage</div>
+            <div class="u-ur-muted" style="margin-top:4px;">Members list and invitations</div>
+          </div>
+          <div class="u-ur-tabs" role="tablist">
+            <button class="u-ur-tab" role="tab" data-tab="members" aria-selected="true">Members</button>
+            <button class="u-ur-tab" role="tab" data-tab="invites" aria-selected="false">Invites</button>
+          </div>
+        </div>
+
+        <div id="u_ur_msg" class="u-ur-msg ok" style="display:none;"></div>
+
+        <div id="u_ur_members_panel">
+          <table class="u-ur-table">
+            <thead>
+              <tr><th>Email</th><th>Role</th><th style="width:220px;">Actions</th></tr>
+            </thead>
+            <tbody id="u_ur_members_tbody"></tbody>
+          </table>
+        </div>
+
+        <div id="u_ur_invites_panel" style="display:none;">
+          <div class="u-ur-inline">
+            <input id="u_ur_invite_email" class="u-ur-input" placeholder="email@domain.com" />
+            <select id="u_ur_invite_role" class="u-ur-input" style="width:180px;">
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+            </select>
+            <button id="u_ur_invite_btn" class="u-ur-btn primary">Send invite</button>
+          </div>
+
+          <table class="u-ur-table">
+            <thead>
+              <tr><th>Email</th><th>Role</th><th>Status</th><th style="width:220px;">Actions</th></tr>
+            </thead>
+            <tbody id="u_ur_invites_tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+
+    const close = () => {
+      try { backdrop.remove(); } catch {}
+      try { modal.remove(); } catch {}
+      document.documentElement.style.overflow = "";
+    };
+
+    qs(".u-ur-close", modal).addEventListener("click", close);
+    backdrop.addEventListener("click", close);
+
+    // ESC
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    window.addEventListener("keydown", onKey, { once: true });
+
+    document.body.appendChild(backdrop);
+    document.body.appendChild(modal);
+    document.documentElement.style.overflow = "hidden";
+
+    return { modal, close };
+  }
+
+  function setMsg(type, text) {
+    const box = qs("#u_ur_msg");
+    if (!box) return;
+    box.style.display = text ? "block" : "none";
+    box.className = "u-ur-msg " + (type === "err" ? "err" : "ok");
+    box.textContent = text || "";
+  }
+
+  function setTab(modal, tab) {
+    const tabs = qsa(".u-ur-tab", modal);
+    tabs.forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
+    qs("#u_ur_members_panel", modal).style.display = tab === "members" ? "block" : "none";
+    qs("#u_ur_invites_panel", modal).style.display  = tab === "invites" ? "block" : "none";
+  }
+
+  // ---------- Data layer (RLS-first, tokenless) ----------
+  async function getContext(sb) {
+    const { data: { user }, error } = await sb.auth.getUser();
+    if (error) throw error;
+    if (!user) return { user: null, company_id: null, is_admin: false, my_companies: [] };
+
+    // RLS-first: ask DB what companies this user belongs to.
+    const { data: myCompanies, error: e1 } = await sb.rpc("my_company_ids");
+    if (e1) throw e1;
+
+    const my_companies = Array.isArray(myCompanies) ? myCompanies : [];
+    const company_id = my_companies[0] || null; // if multiple: take first (you can improve later with a company switcher)
+
+    let is_admin = false;
+    if (company_id) {
+      const { data: isAdmin, error: e2 } = await sb.rpc("is_company_admin", { p_company_id: company_id });
+      if (e2) throw e2;
+      is_admin = !!isAdmin;
     }
 
-    // Load from CDN (safe fallback)
-    await new Promise((resolve, reject) => {
-      const id = "u_supabase_js_v2";
-      if (document.getElementById(id)) return resolve();
-      const s = el("script", {
-        id,
-        src: "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
-        async: true,
-        onload: resolve,
-        onerror: () => reject(new Error("Failed to load supabase-js v2 from CDN")),
-      });
-      document.head.appendChild(s);
-    });
-
-    if (!window.supabase || typeof window.supabase.createClient !== "function") {
-      throw new Error("supabase-js not available after load");
-    }
-    return window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+    return { user, company_id, is_admin, my_companies };
   }
 
-  // ----------------------------
-  // Token resolver (legacy OR Supabase)
-  // ----------------------------
-  async function resolveDashboardToken({ supabase }) {
-    // 1) Legacy: querystring or localStorage
-    let token =
-      (qp("token") || "").trim() ||
-      CFG.TOKEN_KEYS.map((k) => (localStorage.getItem(k) || "").trim()).find(Boolean) ||
-      "";
-
-    if (token) return { token, source: "legacy" };
-
-    // 2) Supabase: authenticated -> RLS fetch company + manage_token
-    const { data: sessData, error: sessErr } = await supabase.auth.getSession();
-    if (sessErr) return { token: "", source: "none", error: sessErr };
-    const session = sessData?.session;
-    if (!session?.user?.id) return { token: "", source: "none" };
-
-    const { data: companyIds, error: rpcErr } = await supabase.rpc("my_company_ids");
-    if (rpcErr) return { token: "", source: "none", error: rpcErr };
-
-    const ids = Array.isArray(companyIds) ? companyIds : [];
-    if (!ids.length) return { token: "", source: "none" };
-
-    const { data: companies, error: compErr } = await supabase
-      .from("companies")
-      .select("id,name,manage_token,stripe_customer_id,created_at")
-      .in("id", ids);
-
-    if (compErr) return { token: "", source: "none", error: compErr };
-
-    const list = Array.isArray(companies) ? companies : [];
-
-    // choose best company (stripe_customer_id first, then has manage_token, then newest)
-    list.sort((a, b) => {
-      const aStripe = a?.stripe_customer_id ? 1 : 0;
-      const bStripe = b?.stripe_customer_id ? 1 : 0;
-      if (aStripe !== bStripe) return bStripe - aStripe;
-
-      const aTok = a?.manage_token ? 1 : 0;
-      const bTok = b?.manage_token ? 1 : 0;
-      if (aTok !== bTok) return bTok - aTok;
-
-      const ad = a?.created_at ? Date.parse(a.created_at) : 0;
-      const bd = b?.created_at ? Date.parse(b.created_at) : 0;
-      return bd - ad;
-    });
-
-    const chosen = list[0];
-    token = (chosen?.manage_token || "").trim();
-    if (!token) return { token: "", source: "none", company: chosen };
-
-    try {
-      CFG.TOKEN_KEYS.forEach((k) => localStorage.setItem(k, token));
-    } catch (_) {}
-
-    return { token, source: "supabase", company: chosen };
-  }
-
-  // ----------------------------
-  // Company resolution (Supabase)
-  // ----------------------------
-  async function resolveActiveCompany({ supabase }) {
-    const { data: sessData } = await supabase.auth.getSession();
-    const user = sessData?.session?.user || null;
-    if (!user?.id) return { user: null, company: null, isAdmin: false, companyIds: [] };
-
-    const { data: companyIds, error: rpcErr } = await supabase.rpc("my_company_ids");
-    if (rpcErr) return { user, company: null, isAdmin: false, companyIds: [], error: rpcErr };
-
-    const ids = Array.isArray(companyIds) ? companyIds : [];
-    if (!ids.length) return { user, company: null, isAdmin: false, companyIds: [] };
-
-    const { data: companies, error: compErr } = await supabase
-      .from("companies")
-      .select("id,name,manage_token,stripe_customer_id,created_at")
-      .in("id", ids);
-
-    if (compErr) return { user, company: null, isAdmin: false, companyIds: ids, error: compErr };
-
-    const list = Array.isArray(companies) ? companies : [];
-    list.sort((a, b) => {
-      const aStripe = a?.stripe_customer_id ? 1 : 0;
-      const bStripe = b?.stripe_customer_id ? 1 : 0;
-      if (aStripe !== bStripe) return bStripe - aStripe;
-      const aTok = a?.manage_token ? 1 : 0;
-      const bTok = b?.manage_token ? 1 : 0;
-      if (aTok !== bTok) return bTok - aTok;
-      const ad = a?.created_at ? Date.parse(a.created_at) : 0;
-      const bd = b?.created_at ? Date.parse(b.created_at) : 0;
-      return bd - ad;
-    });
-
-    const company = list[0] || null;
-
-    let isAdmin = false;
-    if (company?.id) {
-      const { data: adminVal, error: admErr } = await supabase.rpc("is_company_admin", {
-        p_company_id: company.id,
-      });
-      if (!admErr) isAdmin = !!adminVal;
-    }
-
-    return { user, company, isAdmin, companyIds: ids };
-  }
-
-  // ----------------------------
-  // Data operations
-  // ----------------------------
-  async function fetchMembers({ supabase, companyId }) {
-    // NOTE: no company_members.id assumed
-    const { data, error } = await supabase
+  async function loadMembers(sb, company_id) {
+    const { data, error } = await sb
       .from("company_members")
-      .select("company_id,user_id,role,user_email,created_at")
-      .eq("company_id", companyId)
+      .select("user_id, user_email, role, created_at")
+      .eq("company_id", company_id)
       .order("created_at", { ascending: true });
 
     if (error) throw error;
-    return Array.isArray(data) ? data : [];
+    return data || [];
   }
 
-  async function updateMemberRole({ supabase, companyId, userId, role }) {
-    const { error } = await supabase
-      .from("company_members")
-      .update({ role })
-      .eq("company_id", companyId)
-      .eq("user_id", userId);
-
-    if (error) throw error;
-  }
-
-  async function removeMember({ supabase, companyId, userId }) {
-    const { error } = await supabase
-      .from("company_members")
-      .delete()
-      .eq("company_id", companyId)
-      .eq("user_id", userId);
-
-    if (error) throw error;
-  }
-
-  async function fetchInvites({ supabase, companyId }) {
-    const { data, error } = await supabase
+  async function loadInvites(sb, company_id) {
+    const { data, error } = await sb
       .from("company_invites")
-      .select("id,company_id,email,role,status,invited_by,created_at")
-      .eq("company_id", companyId)
+      .select("id, email, role, status, created_at")
+      .eq("company_id", company_id)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-    return Array.isArray(data) ? data : [];
+    return data || [];
   }
 
-  async function createInvite({ supabase, companyId, email, role }) {
-    const { data: sessData } = await supabase.auth.getSession();
-    const invitedBy = sessData?.session?.user?.id || null;
+  async function upsertMemberRole(sb, company_id, user_id, role, user_email) {
+    const payload = { company_id, user_id, role };
+    if (user_email) payload.user_email = user_email;
 
-    const payload = {
-      company_id: companyId,
-      email: String(email || "").trim().toLowerCase(),
-      role: role || "member",
-      status: "pending",
-      invited_by: invitedBy,
-    };
+    const { error } = await sb
+      .from("company_members")
+      .upsert(payload, { onConflict: "company_id,user_id" });
 
-    const { error } = await supabase.from("company_invites").insert(payload);
     if (error) throw error;
   }
 
-  async function revokeInvite({ supabase, inviteId }) {
-    const { error } = await supabase.from("company_invites").delete().eq("id", inviteId);
+  async function removeMember(sb, company_id, user_id) {
+    const { error } = await sb
+      .from("company_members")
+      .delete()
+      .eq("company_id", company_id)
+      .eq("user_id", user_id);
+
     if (error) throw error;
   }
 
-  // ----------------------------
-  // UI
-  // ----------------------------
-  function makeUI() {
-    cssOnce();
+  async function createInvite(sb, company_id, email, role) {
+    const { error } = await sb
+      .from("company_invites")
+      .insert({ company_id, email, role, status: "pending" });
 
-    const overlay = el("div", { class: "u-ur-overlay", id: "u_users_roles_overlay" });
-    const modal = el("div", { class: "u-ur-modal", role: "dialog", "aria-modal": "true" });
-
-    const head = el("div", { class: "u-ur-head" }, [
-      el("div", {}, [
-        el("h2", { class: "u-ur-title" }, "Users & Roles"),
-        el("div", { class: "u-ur-sub" }, "Manage access for your company"),
-      ]),
-      el(
-        "button",
-        {
-          class: "u-ur-x",
-          type: "button",
-          onClick: () => close(),
-          "aria-label": "Close",
-        },
-        "✕"
-      ),
-    ]);
-
-    const body = el("div", { class: "u-ur-body" });
-
-    // Session / context cards (simple)
-    const kv = el("div", { class: "u-ur-kv" });
-    const kvSession = el("div", { class: "u-ur-kvbox" }, [
-      el("h4", {}, "Session"),
-      el("div", { class: "val", id: "u_ur_signed_in_as" }, "—"),
-    ]);
-    const kvToken = el("div", { class: "u-ur-kvbox" }, [
-      el("h4", {}, "Dashboard token"),
-      el("div", { class: "val", id: "u_ur_token" }, "—"),
-    ]);
-    kv.appendChild(kvSession);
-    kv.appendChild(kvToken);
-
-    const card = el("div", { class: "u-ur-card" });
-
-    const tabs = el("div", { class: "u-ur-tabs" }, [
-      el("button", { class: "u-ur-tab is-active", type: "button", id: "u_ur_tab_members" }, "Members"),
-      el("button", { class: "u-ur-tab", type: "button", id: "u_ur_tab_invites" }, "Invites"),
-    ]);
-
-    const cardHead = el("div", { class: "u-ur-cardhead" }, [
-      el("div", {}, [
-        el("div", { class: "u-ur-cardtitle" }, "Manage"),
-        el("div", { class: "u-ur-muted" }, "Members list and invitations"),
-      ]),
-      tabs,
-    ]);
-
-    const section = el("div", { class: "u-ur-section" });
-
-    const banner = el("div", { class: "u-ur-banner", id: "u_ur_banner", style: "display:none" }, "");
-
-    const membersWrap = el("div", { id: "u_ur_members_wrap" });
-    const invitesWrap = el("div", { id: "u_ur_invites_wrap", style: "display:none" });
-
-    section.appendChild(banner);
-    section.appendChild(membersWrap);
-    section.appendChild(invitesWrap);
-
-    card.appendChild(cardHead);
-    card.appendChild(section);
-
-    body.appendChild(kv);
-    body.appendChild(card);
-
-    modal.appendChild(head);
-    modal.appendChild(body);
-    overlay.appendChild(modal);
-
-    const root = document.querySelector(CFG.MODAL_APPEND_TO) || document.body;
-    root.appendChild(overlay);
-
-    // Tab switching
-    const tabMembers = card.querySelector("#u_ur_tab_members");
-    const tabInvites = card.querySelector("#u_ur_tab_invites");
-
-    function setTab(which) {
-      const isMembers = which === "members";
-      tabMembers.classList.toggle("is-active", isMembers);
-      tabInvites.classList.toggle("is-active", !isMembers);
-      membersWrap.style.display = isMembers ? "" : "none";
-      invitesWrap.style.display = !isMembers ? "" : "none";
-    }
-
-    tabMembers.addEventListener("click", () => setTab("members"));
-    tabInvites.addEventListener("click", () => setTab("invites"));
-
-    // Close on overlay click
-    overlay.addEventListener("click", (e) => {
-      if (e.target === overlay) close();
-    });
-
-    function open() {
-      overlay.style.display = "flex";
-      document.documentElement.style.overflow = "hidden";
-    }
-    function close() {
-      overlay.style.display = "none";
-      document.documentElement.style.overflow = "";
-    }
-
-    function showError(msg) {
-      banner.textContent = msg || "Error";
-      banner.style.display = "";
-    }
-    function clearError() {
-      banner.textContent = "";
-      banner.style.display = "none";
-    }
-
-    return {
-      open,
-      close,
-      showError,
-      clearError,
-      setTab,
-      membersWrap,
-      invitesWrap,
-      signedInEl: kvSession.querySelector("#u_ur_signed_in_as"),
-      tokenEl: kvToken.querySelector("#u_ur_token"),
-    };
+    if (error) throw error;
   }
 
-  function renderMembers({ ui, members, isAdmin, onRoleChange, onRemove }) {
-    ui.membersWrap.innerHTML = "";
+  async function cancelInvite(sb, invite_id) {
+    const { error } = await sb
+      .from("company_invites")
+      .delete()
+      .eq("id", invite_id);
 
-    if (!members.length) {
-      ui.membersWrap.appendChild(el("div", { class: "u-ur-muted" }, "No members found."));
-      return;
-    }
+    if (error) throw error;
+  }
+
+  // ---------- Render ----------
+  function renderMembers(modal, ctx, members) {
+    const tb = qs("#u_ur_members_tbody", modal);
+    tb.innerHTML = "";
+
+    const me = ctx.user?.id;
 
     members.forEach((m) => {
-      const email = m.user_email || "(email unknown)";
-      const role = (m.role || "member").toLowerCase();
+      const tr = document.createElement("tr");
+      const email = m.user_email || "(no email)";
+      tr.innerHTML = `
+        <td>${escapeHtml(email)}</td>
+        <td>${escapeHtml(m.role || "")}</td>
+        <td>
+          <div class="u-ur-actions">
+            <button class="u-ur-btn" data-act="make_member">member</button>
+            <button class="u-ur-btn" data-act="make_admin">admin</button>
+            <button class="u-ur-btn danger" data-act="remove">remove</button>
+          </div>
+        </td>
+      `;
 
-      const roleSelect = el(
-        "select",
-        { class: "u-ur-select", ...(isAdmin ? {} : { disabled: "true" }) },
-        [
-          el("option", { value: "owner", ...(role === "owner" ? { selected: "true" } : {}) }, "owner"),
-          el("option", { value: "admin", ...(role === "admin" ? { selected: "true" } : {}) }, "admin"),
-          el("option", { value: "member", ...(role === "member" ? { selected: "true" } : {}) }, "member"),
-        ]
-      );
+      // Permissions:
+      const canEdit = ctx.is_admin;
+      qsa("button", tr).forEach((b) => {
+        if (!canEdit) b.disabled = true;
+      });
 
-      roleSelect.addEventListener("change", () => onRoleChange(m, roleSelect.value));
+      // You can’t remove yourself (safety)
+      if (String(m.user_id) === String(me)) {
+        const btnRemove = qs('button[data-act="remove"]', tr);
+        if (btnRemove) btnRemove.disabled = true;
+      }
 
-      const removeBtn = el(
-        "button",
-        {
-          class: "u-ur-btn danger",
-          type: "button",
-          ...(isAdmin ? {} : { disabled: "true" }),
-        },
-        "Remove"
-      );
-      removeBtn.addEventListener("click", () => onRemove(m));
+      tr.addEventListener("click", async (e) => {
+        const btn = e.target.closest("button[data-act]");
+        if (!btn) return;
+        if (!ctx.is_admin) return;
 
-      const row = el("div", { class: "u-ur-row" }, [
-        el("div", {}, [
-          el("div", {}, [el("strong", {}, email)]),
-          el("div", { class: "u-ur-muted" }, `user_id: ${m.user_id}`),
-        ]),
-        el("div", {}, [el("span", { class: "u-ur-pill" }, "Role"), el("div", { style: "height:8px" }), roleSelect]),
-        el("div", { class: "u-ur-actions" }, [removeBtn]),
-      ]);
+        const act = btn.dataset.act;
 
-      ui.membersWrap.appendChild(row);
+        try {
+          setMsg("ok", "");
+          btn.disabled = true;
+
+          if (act === "make_member") {
+            await window.UlydiaUsersRoles._api.upsertMemberRole(m.user_id, "member", m.user_email);
+            setMsg("ok", `Role updated: ${email} → member`);
+          } else if (act === "make_admin") {
+            await window.UlydiaUsersRoles._api.upsertMemberRole(m.user_id, "admin", m.user_email);
+            setMsg("ok", `Role updated: ${email} → admin`);
+          } else if (act === "remove") {
+            await window.UlydiaUsersRoles._api.removeMember(m.user_id);
+            setMsg("ok", `Removed: ${email}`);
+          }
+
+          await window.UlydiaUsersRoles.refresh();
+        } catch (ex) {
+          err(ex);
+          setMsg("err", ex?.message || String(ex));
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+      tb.appendChild(tr);
     });
+
+    if (!members.length) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="3" class="u-ur-muted">No members found.</td>`;
+      tb.appendChild(tr);
+    }
   }
 
-  function renderInvites({ ui, invites, isAdmin, onCreate, onRevoke }) {
-    ui.invitesWrap.innerHTML = "";
+  function renderInvites(modal, ctx, invites) {
+    const tb = qs("#u_ur_invites_tbody", modal);
+    tb.innerHTML = "";
 
-    if (!isAdmin) {
-      ui.invitesWrap.appendChild(
-        el("div", { class: "u-ur-banner" }, "You must be admin/owner to manage invites.")
-      );
-      return;
-    }
+    invites.forEach((inv) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(inv.email || "")}</td>
+        <td>${escapeHtml(inv.role || "")}</td>
+        <td>${escapeHtml(inv.status || "")}</td>
+        <td>
+          <div class="u-ur-actions">
+            <button class="u-ur-btn danger" data-act="cancel">cancel</button>
+          </div>
+        </td>
+      `;
 
-    const emailInput = el("input", {
-      class: "u-ur-input",
-      type: "email",
-      placeholder: "Invite email (e.g. user@company.com)",
-    });
+      const canEdit = ctx.is_admin;
+      qsa("button", tr).forEach((b) => {
+        if (!canEdit) b.disabled = true;
+      });
 
-    const roleSelect = el("select", { class: "u-ur-select" }, [
-      el("option", { value: "member" }, "member"),
-      el("option", { value: "admin" }, "admin"),
-    ]);
+      tr.addEventListener("click", async (e) => {
+        const btn = e.target.closest("button[data-act]");
+        if (!btn) return;
+        if (!ctx.is_admin) return;
 
-    const addBtn = el("button", { class: "u-ur-btn primary", type: "button" }, "Send invite");
+        try {
+          setMsg("ok", "");
+          btn.disabled = true;
+          await window.UlydiaUsersRoles._api.cancelInvite(inv.id);
+          setMsg("ok", `Invite cancelled: ${inv.email}`);
+          await window.UlydiaUsersRoles.refresh();
+        } catch (ex) {
+          err(ex);
+          setMsg("err", ex?.message || String(ex));
+        } finally {
+          btn.disabled = false;
+        }
+      });
 
-    const form = el("div", { class: "u-ur-form" }, [emailInput, roleSelect, addBtn]);
-    ui.invitesWrap.appendChild(form);
-
-    addBtn.addEventListener("click", () => {
-      const email = (emailInput.value || "").trim();
-      const role = roleSelect.value;
-      onCreate(email, role);
+      tb.appendChild(tr);
     });
 
     if (!invites.length) {
-      ui.invitesWrap.appendChild(el("div", { class: "u-ur-muted" }, "No invites yet."));
-      return;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="4" class="u-ur-muted">No invites found.</td>`;
+      tb.appendChild(tr);
     }
-
-    invites.forEach((inv) => {
-      const row = el("div", { class: "u-ur-row" }, [
-        el("div", {}, [
-          el("div", {}, [el("strong", {}, inv.email)]),
-          el("div", { class: "u-ur-muted" }, `status: ${inv.status || "—"} • role: ${inv.role || "member"}`),
-        ]),
-        el("div", {}, [el("span", { class: "u-ur-pill" }, "Invite"), el("div", { style: "height:8px" }), el("div", { class: "u-ur-muted" }, inv.id)]),
-        el("div", { class: "u-ur-actions" }, [
-          el("button", { class: "u-ur-btn danger", type: "button", onClick: () => onRevoke(inv) }, "Revoke"),
-        ]),
-      ]);
-      ui.invitesWrap.appendChild(row);
-    });
   }
 
-  // ----------------------------
-  // Main init
-  // ----------------------------
-  async function init() {
-    const ui = makeUI();
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
 
-    let supabase;
+  // ---------- Main open() ----------
+  async function open() {
+    const { modal, close } = createModal();
+
+    // tab switching
+    qsa(".u-ur-tab", modal).forEach((b) => {
+      b.addEventListener("click", () => setTab(modal, b.dataset.tab));
+    });
+
+    // IMPORTANT: never freeze page — always close overlay on fatal
     try {
-      supabase = await ensureSupabaseClient();
-    } catch (e) {
-      warn(e);
-      ui.showError("Failed to load Supabase client.");
-      return;
-    }
+      const sb = getSupabase();
 
-    // Resolve token (not mandatory anymore, but nice for dashboard / worker bridges)
-    const tokenRes = await resolveDashboardToken({ supabase });
-    const token = (tokenRes?.token || "").trim();
+      // Store api bindings for render handlers
+      window.UlydiaUsersRoles._api = {
+        upsertMemberRole: (user_id, role, user_email) => upsertMemberRole(sb, window.UlydiaUsersRoles._ctx.company_id, user_id, role, user_email),
+        removeMember: (user_id) => removeMember(sb, window.UlydiaUsersRoles._ctx.company_id, user_id),
+        cancelInvite: (invite_id) => cancelInvite(sb, invite_id),
+      };
 
-    if (CFG.EXPOSE_TOKEN_ON_WINDOW) {
-      window.ULYDIA_DASHBOARD_TOKEN = token || "";
-    }
+      // Load ctx (tokenless, auth-based)
+      const ctx = await getContext(sb);
+      window.UlydiaUsersRoles._sb = sb;
+      window.UlydiaUsersRoles._ctx = ctx;
+      window.UlydiaUsersRoles._modal = modal;
 
-    // Resolve active company & admin status
-    const ctx = await resolveActiveCompany({ supabase });
-    const email = ctx.user?.email || "Not signed in";
-    ui.signedInEl.textContent = `Signed in as ${email}`;
-    ui.tokenEl.textContent = token ? token : "(auto via Supabase — no URL token required)";
-
-    // If user is not signed in at all
-    if (!ctx.user?.id) {
-      ui.showError("You are not signed in. Please log in to manage users.");
-      bindOpen(ui, () => ui.open()); // still openable
-      return;
-    }
-
-    // If user is signed in but no company
-    if (!ctx.company?.id) {
-      ui.showError("No company found for this user (membership missing).");
-      bindOpen(ui, () => ui.open());
-      return;
-    }
-
-    ui.clearError();
-
-    async function refreshAll() {
-      ui.clearError();
-      try {
-        const [members, invites] = await Promise.all([
-          fetchMembers({ supabase, companyId: ctx.company.id }),
-          fetchInvites({ supabase, companyId: ctx.company.id }),
-        ]);
-
-        renderMembers({
-          ui,
-          members,
-          isAdmin: ctx.isAdmin,
-          onRoleChange: async (m, newRole) => {
-            try {
-              await updateMemberRole({ supabase, companyId: ctx.company.id, userId: m.user_id, role: newRole });
-              await refreshAll();
-            } catch (e) {
-              warn(e);
-              ui.showError(e?.message || "Failed to update role.");
-            }
-          },
-          onRemove: async (m) => {
-            // prevent removing yourself if owner/admin? keep simple:
-            if (m.user_id === ctx.user.id) {
-              ui.showError("You cannot remove yourself.");
-              return;
-            }
-            try {
-              await removeMember({ supabase, companyId: ctx.company.id, userId: m.user_id });
-              await refreshAll();
-            } catch (e) {
-              warn(e);
-              ui.showError(e?.message || "Failed to remove member.");
-            }
-          },
-        });
-
-        renderInvites({
-          ui,
-          invites,
-          isAdmin: ctx.isAdmin,
-          onCreate: async (email, role) => {
-            if (!email || !email.includes("@")) {
-              ui.showError("Please enter a valid email.");
-              return;
-            }
-            try {
-              await createInvite({ supabase, companyId: ctx.company.id, email, role });
-              ui.clearError();
-              await refreshAll();
-            } catch (e) {
-              warn(e);
-              ui.showError(e?.message || "Failed to create invite.");
-            }
-          },
-          onRevoke: async (inv) => {
-            try {
-              await revokeInvite({ supabase, inviteId: inv.id });
-              await refreshAll();
-            } catch (e) {
-              warn(e);
-              ui.showError(e?.message || "Failed to revoke invite.");
-            }
-          },
-        });
-      } catch (e) {
-        warn(e);
-        ui.showError("Failed to connect. Check RLS and table names.");
+      if (!ctx.user) {
+        setMsg("err", "You must be logged in to manage users.");
+        return; // modal stays open; user can close
       }
-    }
 
-    // Open handler: refresh before showing
-    bindOpen(ui, async () => {
-      await refreshAll();
-      ui.open();
-      ui.setTab("members");
-    });
-
-    // Auto-refresh when auth changes (optional)
-    supabase.auth.onAuthStateChange(async () => {
-      try {
-        const nextCtx = await resolveActiveCompany({ supabase });
-        if (nextCtx.user?.email) ui.signedInEl.textContent = `Signed in as ${nextCtx.user.email}`;
-      } catch (_) {}
-    });
-
-    log("Users&Roles ready", { tokenRes, ctx });
-  }
-
-  function bindOpen(ui, openFn) {
-    const hook = () => {
-      try {
-        openFn();
-      } catch (e) {
-        warn(e);
-        ui.showError(e?.message || "Init error");
-        ui.open();
+      if (!ctx.company_id) {
+        setMsg("err", "No company linked to this account (company_members empty).");
+        return;
       }
-    };
 
-    // attach click to any matching buttons
-    const bind = () => {
-      const btns = Array.from(document.querySelectorAll(CFG.OPEN_BUTTON_SELECTOR));
-      btns.forEach((b) => {
-        if (b.__ULYDIA_BOUND_USERS_ROLES__) return;
-        b.__ULYDIA_BOUND_USERS_ROLES__ = true;
-        b.addEventListener("click", (e) => {
-          e.preventDefault();
-          hook();
-        });
+      if (!ctx.is_admin) {
+        setMsg("ok", "You are a member (read-only). Ask an admin to change roles.");
+      } else {
+        setMsg("ok", "Admin access confirmed.");
+      }
+
+      // Invite button
+      const inviteBtn = qs("#u_ur_invite_btn", modal);
+      inviteBtn.addEventListener("click", async () => {
+        if (!ctx.is_admin) return;
+        const email = (qs("#u_ur_invite_email", modal).value || "").trim().toLowerCase();
+        const role  = (qs("#u_ur_invite_role", modal).value || "member").trim();
+        if (!email) return setMsg("err", "Please enter an email.");
+
+        try {
+          inviteBtn.disabled = true;
+          setMsg("ok", "");
+          await createInvite(sb, ctx.company_id, email, role);
+          setMsg("ok", `Invite sent to ${email} (${role}).`);
+          qs("#u_ur_invite_email", modal).value = "";
+          await window.UlydiaUsersRoles.refresh();
+        } catch (ex) {
+          err(ex);
+          setMsg("err", ex?.message || String(ex));
+        } finally {
+          inviteBtn.disabled = false;
+        }
       });
-    };
 
-    bind();
-    // observe later-inserted buttons
-    const mo = new MutationObserver(() => bind());
-    mo.observe(document.documentElement, { subtree: true, childList: true });
+      // Initial load
+      await window.UlydiaUsersRoles.refresh();
+
+    } catch (ex) {
+      err(ex);
+      setMsg("err", ex?.message || String(ex));
+
+      // If you prefer: auto-close on fatal init error
+      // close();
+    }
+
+    // expose close if needed
+    return { close };
   }
 
-  // Expose an API if needed
-  window.UlydiaUsersRoles = {
-    init,
+  async function refresh() {
+    const sb = window.UlydiaUsersRoles._sb;
+    const ctx = window.UlydiaUsersRoles._ctx;
+    const modal = window.UlydiaUsersRoles._modal;
+    if (!sb || !ctx || !modal) return;
+
+    try {
+      const [members, invites] = await Promise.all([
+        ctx.company_id ? loadMembers(sb, ctx.company_id) : Promise.resolve([]),
+        ctx.company_id ? loadInvites(sb, ctx.company_id) : Promise.resolve([]),
+      ]);
+
+      renderMembers(modal, ctx, members);
+      renderInvites(modal, ctx, invites);
+    } catch (ex) {
+      err(ex);
+      setMsg("err", ex?.message || String(ex));
+    }
+  }
+
+  // ---------- Public API ----------
+  const api = {
+    open,
+    refresh,
+    // debug helpers
+    _sb: null,
+    _ctx: null,
+    _modal: null,
+    _api: null,
   };
 
-  // Auto-init
-  try {
-    init().catch((e) => warn(e));
-  } catch (e) {
-    warn(e);
-  }
+  window.UlydiaUsersRoles = api;
+  // compat alias (au cas où ton code appelle autre chose)
+  window.UsersRoles = api;
+
+  log("loaded (v3). Call UlydiaUsersRoles.open()");
 })();
 
