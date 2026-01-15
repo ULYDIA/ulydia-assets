@@ -1,39 +1,36 @@
-/* users-roles.js — Ulydia (v4.1, tokenless, single Supabase client)
-   - Reuses existing global Supabase client (prevents "Multiple GoTrueClient instances")
-   - Works WITHOUT dashboard token when user is authenticated (RLS-driven)
+/* users-roles.js — Ulydia (V4, tokenless, single Supabase client)
+   - Works with RLS (no dashboard token required)
+   - Accepts open({ supabase, token }) for compatibility with my-account
    - Uses RPC create_company_invite (as requested)
-   - Robust context resolution: company_members first; optional RPC is_company_admin if available
-   - Hard anti-duplicate guard (prevents "rafale" invites)
-   - Compatible with my-account calling: UlydiaUsersRoles.open({ supabase, token })
+   - Avoids duplicate / rafale (hard guards)
+   - Never freezes page (modal always closable)
 */
 (() => {
-  if (window.__ULYDIA_USERS_ROLES_V41__) return;
-  window.__ULYDIA_USERS_ROLES_V41__ = true;
+  if (window.__ULYDIA_USERS_ROLES_V4__) return;
+  window.__ULYDIA_USERS_ROLES_V4__ = true;
 
   const NS = "[Users&Roles]";
-  const qs = (sel, root = document) => root.querySelector(sel);
-  const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+  // ---------- Small helpers ----------
+  const qs  = (sel, root = document) => root.querySelector(sel);
+  const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
   const log = (...a) => console.log(NS, ...a);
-  const warn = (...a) => console.warn(NS, ...a);
   const err = (...a) => console.error(NS, ...a);
 
-  // ---------------------------------------------------------
-  // Supabase client (single instance)
-  // ---------------------------------------------------------
-  function getSupabaseFrom(opts) {
+  // ---------- Supabase client ----------
+  function getSupabaseFrom(opts){
     if (opts?.supabase) return opts.supabase;
 
+    // Prefer global from my-account
     if (window.__ULYDIA_SUPABASE__) return window.__ULYDIA_SUPABASE__;
     if (window._ULYDIA_SUPABASE_) return window._ULYDIA_SUPABASE_;
 
+    // Last resort (only if config provided)
     const cfg = window.ULYDIA_USERS_ROLES_CONFIG || window.__ULYDIA_CONFIG__ || {};
     const SUPABASE_URL = cfg.SUPABASE_URL;
     const SUPABASE_ANON_KEY = cfg.SUPABASE_ANON_KEY;
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error("Supabase client missing. Provide opts.supabase or set global __ULYDIA_SUPABASE__.");
 
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-      throw new Error("Supabase client missing. Expected window.__ULYDIA_SUPABASE__ (preferred) or config ULYDIA_USERS_ROLES_CONFIG.");
-    }
     if (!window.supabase?.createClient) throw new Error("Supabase JS not loaded (window.supabase.createClient missing).");
 
     const storageKey = cfg.STORAGE_KEY || "ulydia_auth_v1";
@@ -45,9 +42,7 @@
     return client;
   }
 
-  // ---------------------------------------------------------
-  // UI
-  // ---------------------------------------------------------
+  // ---------- UI ----------
   function mountStyles() {
     if (document.getElementById("u_users_roles_css")) return;
     const s = document.createElement("style");
@@ -117,9 +112,7 @@
 
         <div id="u_ur_members_panel">
           <table class="u-ur-table">
-            <thead>
-              <tr><th>Email</th><th>Role</th><th style="width:220px;">Actions</th></tr>
-            </thead>
+            <thead><tr><th>Email</th><th>Role</th><th style="width:220px;">Actions</th></tr></thead>
             <tbody id="u_ur_members_tbody"></tbody>
           </table>
         </div>
@@ -135,9 +128,7 @@
           </div>
 
           <table class="u-ur-table">
-            <thead>
-              <tr><th>Email</th><th>Role</th><th>Status</th><th style="width:220px;">Actions</th></tr>
-            </thead>
+            <thead><tr><th>Email</th><th>Role</th><th>Status</th><th style="width:220px;">Actions</th></tr></thead>
             <tbody id="u_ur_invites_tbody"></tbody>
           </table>
         </div>
@@ -152,9 +143,7 @@
 
     qs(".u-ur-close", modal).addEventListener("click", close);
     backdrop.addEventListener("click", close);
-
-    const onKey = (e) => { if (e.key === "Escape") close(); };
-    window.addEventListener("keydown", onKey, { once: true });
+    window.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); }, { once: true });
 
     document.body.appendChild(backdrop);
     document.body.appendChild(modal);
@@ -172,65 +161,38 @@
   }
 
   function setTab(modal, tab) {
-    const tabs = qsa(".u-ur-tab", modal);
-    tabs.forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
+    qsa(".u-ur-tab", modal).forEach(b => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
     qs("#u_ur_members_panel", modal).style.display = tab === "members" ? "block" : "none";
     qs("#u_ur_invites_panel", modal).style.display  = tab === "invites" ? "block" : "none";
   }
 
   function escapeHtml(s) {
     return String(s ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
+      .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
   }
 
-  // ---------------------------------------------------------
-  // Data layer (tokenless / RLS)
-  // ---------------------------------------------------------
-  async function getMyCompanyRows(sb, userId) {
-    const { data, error } = await sb
+  // ---------- Data (RLS-first) ----------
+  async function getContext(sb) {
+    const { data: userRes, error: userErr } = await sb.auth.getUser();
+    if (userErr) throw userErr;
+    const user = userRes?.user;
+    if (!user) return { user:null, company_id:null, is_admin:false };
+
+    // Source of truth: company_members
+    const { data: rows, error } = await sb
       .from("company_members")
       .select("company_id, role, created_at")
-      .eq("user_id", userId)
+      .eq("user_id", user.id)
       .order("created_at", { ascending: true });
+
     if (error) throw error;
-    return data || [];
-  }
 
-  async function rpcIsCompanyAdmin(sb, company_id) {
-    // optional: if RPC not exposed / not in schema cache => return null (don’t block)
-    try {
-      const { data, error } = await sb.rpc("is_company_admin", { p_company_id: company_id });
-      if (error) throw error;
-      return !!data;
-    } catch (_e) {
-      return null;
-    }
-  }
+    const company_id = rows?.[0]?.company_id || null;
+    const myRole = rows?.find(r => String(r.company_id) === String(company_id))?.role || null;
+    const is_admin = (myRole === "admin");
 
-  async function getContext(sb) {
-    const { data: userRes, error } = await sb.auth.getUser();
-    if (error) throw error;
-    const user = userRes?.user;
-    if (!user) return { user: null, company_id: null, is_admin: false, my_companies: [] };
-
-    const rows = await getMyCompanyRows(sb, user.id);
-
-    const my_companies = rows.map(r => r.company_id).filter(Boolean);
-    const company_id = my_companies[0] || null;
-
-    const myRole = rows.find(r => String(r.company_id) === String(company_id))?.role || null;
-    let is_admin = (myRole === "admin");
-
-    if (company_id) {
-      const rpcVal = await rpcIsCompanyAdmin(sb, company_id);
-      if (rpcVal !== null) is_admin = rpcVal;
-    }
-
-    return { user, company_id, is_admin, my_companies };
+    return { user, company_id, is_admin };
   }
 
   async function loadMembers(sb, company_id) {
@@ -256,69 +218,63 @@
   async function upsertMemberRole(sb, company_id, user_id, role, user_email) {
     const payload = { company_id, user_id, role };
     if (user_email) payload.user_email = user_email;
-
-    const { error } = await sb
-      .from("company_members")
-      .upsert(payload, { onConflict: "company_id,user_id" });
+    const { error } = await sb.from("company_members").upsert(payload, { onConflict: "company_id,user_id" });
     if (error) throw error;
   }
 
   async function removeMember(sb, company_id, user_id) {
-    const { error } = await sb
-      .from("company_members")
-      .delete()
-      .eq("company_id", company_id)
-      .eq("user_id", user_id);
+    const { error } = await sb.from("company_members").delete().eq("company_id", company_id).eq("user_id", user_id);
     if (error) throw error;
   }
 
-  // REQUIRED: RPC create_company_invite
+  // Uses RPC create_company_invite
   async function createInviteRPC(sb, company_id, email, role) {
     const p_email = String(email || "").trim().toLowerCase();
     const p_role = String(role || "member").trim();
     const p_company_id = company_id;
-
     const { data, error } = await sb.rpc("create_company_invite", { p_email, p_role, p_company_id });
     if (error) throw error;
-    return data; // token/uuid/whatever your SQL returns
+    return data;
   }
 
   async function cancelInvite(sb, invite_id) {
-    const { error } = await sb
-      .from("company_invites")
-      .delete()
-      .eq("id", invite_id);
+    const { error } = await sb.from("company_invites").delete().eq("id", invite_id);
     if (error) throw error;
   }
 
-  // ---------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------
+  // ---------- Render ----------
   function renderMembers(modal, ctx, members) {
     const tb = qs("#u_ur_members_tbody", modal);
     tb.innerHTML = "";
 
     const me = ctx.user?.id;
 
-    members.forEach((m) => {
+    if (!members.length) {
       const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="3" class="u-ur-muted">No members found.</td>`;
+      tb.appendChild(tr);
+      return;
+    }
+
+    members.forEach((m) => {
       const email = m.user_email || "(no email)";
+      const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${escapeHtml(email)}</td>
         <td>${escapeHtml(m.role || "")}</td>
         <td>
           <div class="u-ur-actions">
-            <button class="u-ur-btn" data-act="make_member" type="button">member</button>
-            <button class="u-ur-btn" data-act="make_admin" type="button">admin</button>
-            <button class="u-ur-btn danger" data-act="remove" type="button">remove</button>
+            <button class="u-ur-btn" data-act="make_member">member</button>
+            <button class="u-ur-btn" data-act="make_admin">admin</button>
+            <button class="u-ur-btn danger" data-act="remove">remove</button>
           </div>
         </td>
       `;
 
-      const canEdit = ctx.is_admin;
-      qsa("button", tr).forEach((b) => { if (!canEdit) b.disabled = true; });
+      const canEdit = !!ctx.is_admin;
+      qsa("button", tr).forEach(b => { if (!canEdit) b.disabled = true; });
 
-      // safety: you can’t remove yourself
+      // can't remove self
       if (String(m.user_id) === String(me)) {
         const btnRemove = qs('button[data-act="remove"]', tr);
         if (btnRemove) btnRemove.disabled = true;
@@ -329,29 +285,27 @@
         if (!btn) return;
         if (!ctx.is_admin) return;
 
-        e.preventDefault();
-        e.stopPropagation();
-
+        e.preventDefault(); e.stopPropagation();
         if (btn.dataset.loading === "1") return;
         btn.dataset.loading = "1";
 
-        const act = btn.dataset.act;
         try {
           setMsg("ok", "");
           btn.disabled = true;
 
+          const act = btn.dataset.act;
           if (act === "make_member") {
-            await window.UlydiaUsersRoles._api.upsertMemberRole(m.user_id, "member", m.user_email);
+            await api._api.upsertMemberRole(m.user_id, "member", m.user_email);
             setMsg("ok", `Role updated: ${email} → member`);
           } else if (act === "make_admin") {
-            await window.UlydiaUsersRoles._api.upsertMemberRole(m.user_id, "admin", m.user_email);
+            await api._api.upsertMemberRole(m.user_id, "admin", m.user_email);
             setMsg("ok", `Role updated: ${email} → admin`);
           } else if (act === "remove") {
-            await window.UlydiaUsersRoles._api.removeMember(m.user_id);
+            await api._api.removeMember(m.user_id);
             setMsg("ok", `Removed: ${email}`);
           }
 
-          await window.UlydiaUsersRoles.refresh();
+          await api.refresh();
         } catch (ex) {
           err(ex);
           setMsg("err", ex?.message || String(ex));
@@ -363,17 +317,18 @@
 
       tb.appendChild(tr);
     });
-
-    if (!members.length) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="3" class="u-ur-muted">No members found.</td>`;
-      tb.appendChild(tr);
-    }
   }
 
   function renderInvites(modal, ctx, invites) {
     const tb = qs("#u_ur_invites_tbody", modal);
     tb.innerHTML = "";
+
+    if (!invites.length) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="4" class="u-ur-muted">No invites found.</td>`;
+      tb.appendChild(tr);
+      return;
+    }
 
     invites.forEach((inv) => {
       const tr = document.createElement("tr");
@@ -383,31 +338,31 @@
         <td>${escapeHtml(inv.status || "")}</td>
         <td>
           <div class="u-ur-actions">
-            <button class="u-ur-btn danger" data-act="cancel" type="button">cancel</button>
+            <button class="u-ur-btn danger" data-act="cancel">cancel</button>
           </div>
         </td>
       `;
 
-      const canEdit = ctx.is_admin;
-      qsa("button", tr).forEach((b) => { if (!canEdit) b.disabled = true; });
+      const canEdit = !!ctx.is_admin;
+      qsa("button", tr).forEach(b => { if (!canEdit) b.disabled = true; });
 
       tr.addEventListener("click", async (e) => {
         const btn = e.target.closest("button[data-act]");
         if (!btn) return;
         if (!ctx.is_admin) return;
 
-        e.preventDefault();
-        e.stopPropagation();
-
+        e.preventDefault(); e.stopPropagation();
         if (btn.dataset.loading === "1") return;
         btn.dataset.loading = "1";
 
         try {
           setMsg("ok", "");
           btn.disabled = true;
-          await window.UlydiaUsersRoles._api.cancelInvite(inv.id);
+
+          await api._api.cancelInvite(inv.id);
           setMsg("ok", `Invite cancelled: ${inv.email}`);
-          await window.UlydiaUsersRoles.refresh();
+
+          await api.refresh();
         } catch (ex) {
           err(ex);
           setMsg("err", ex?.message || String(ex));
@@ -419,150 +374,118 @@
 
       tb.appendChild(tr);
     });
-
-    if (!invites.length) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="4" class="u-ur-muted">No invites found.</td>`;
-      tb.appendChild(tr);
-    }
   }
 
-  // ---------------------------------------------------------
-  // API
-  // ---------------------------------------------------------
-  async function open(opts = {}) {
-    const { modal } = createModal();
+  // ---------- Public API ----------
+  const api = {
+    _sb: null,
+    _ctx: null,
+    _modal: null,
+    _api: null,
 
-    qsa(".u-ur-tab", modal).forEach((b) => {
-      b.addEventListener("click", () => setTab(modal, b.dataset.tab));
-    });
+    async open(opts = {}) {
+      const { modal } = createModal();
 
-    try {
-      const sb = getSupabaseFrom(opts);
+      qsa(".u-ur-tab", modal).forEach((b) => {
+        b.addEventListener("click", () => setTab(modal, b.dataset.tab));
+      });
 
-      const ctx = await getContext(sb);
-      api._sb = sb;
-      api._ctx = ctx;
-      api._modal = modal;
+      try {
+        const sb = getSupabaseFrom(opts);
+        api._sb = sb;
+        api._modal = modal;
 
-      api._api = {
-        upsertMemberRole: (user_id, role, user_email) =>
-          upsertMemberRole(sb, api._ctx.company_id, user_id, role, user_email),
-        removeMember: (user_id) =>
-          removeMember(sb, api._ctx.company_id, user_id),
-        cancelInvite: (invite_id) =>
-          cancelInvite(sb, invite_id),
-        createInvite: (email, role) =>
-          createInviteRPC(sb, api._ctx.company_id, email, role),
-      };
+        const ctx = await getContext(sb);
+        api._ctx = ctx;
 
-      // HARD guard (anti “rafale”) at createInvite level
-      if (!api._api.__inviteGuardPatched) {
-        api._api.__inviteGuardPatched = true;
-
-        const original = api._api.createInvite.bind(api._api);
-        let inFlightKey = null;
-
-        api._api.createInvite = async (email, role) => {
-          const e = String(email || "").trim().toLowerCase();
-          const r = String(role || "").trim();
-          const key = `${e}|${r}`;
-          if (inFlightKey === key) return null;
-          inFlightKey = key;
-          try { return await original(e, r); }
-          finally { inFlightKey = null; }
+        api._api = {
+          upsertMemberRole: (user_id, role, user_email) => upsertMemberRole(sb, api._ctx.company_id, user_id, role, user_email),
+          removeMember: (user_id) => removeMember(sb, api._ctx.company_id, user_id),
+          cancelInvite: (invite_id) => cancelInvite(sb, invite_id),
+          createInvite: (email, role) => createInviteRPC(sb, api._ctx.company_id, email, role),
         };
-      }
 
-      if (!ctx.user) {
-        setMsg("err", "You must be logged in to manage users.");
-        return;
-      }
-      if (!ctx.company_id) {
-        setMsg("err", "No company linked to this account (company_members empty).");
-        return;
-      }
+        // If not logged in / no company
+        if (!ctx.user) { setMsg("err", "You must be logged in to manage users."); return; }
+        if (!ctx.company_id) { setMsg("err", "No company linked to this account (company_members empty)."); return; }
 
-      setMsg("ok", ctx.is_admin ? "Admin access confirmed." : "You are a member (read-only). Ask an admin to change roles.");
+        setMsg("ok", ctx.is_admin ? "Admin access confirmed." : "You are a member (read-only). Ask an admin to change roles.");
 
-      // Invite button (bind once per modal instance)
-      const inviteBtn = qs("#u_ur_invite_btn", modal);
-      if (inviteBtn && !inviteBtn.dataset.bound) {
-        inviteBtn.dataset.bound = "1";
+        // Invite button (hard guard rafale)
+        const inviteBtn = qs("#u_ur_invite_btn", modal);
+        if (!inviteBtn.dataset.bound) {
+          inviteBtn.dataset.bound = "1";
+          let inflightKey = null;
 
-        inviteBtn.addEventListener("click", async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (!api._ctx?.is_admin) return;
+          inviteBtn.addEventListener("click", async (e) => {
+            e.preventDefault(); e.stopPropagation();
+            if (!ctx.is_admin) return;
 
-          if (inviteBtn.dataset.loading === "1") return;
-          inviteBtn.dataset.loading = "1";
+            const email = (qs("#u_ur_invite_email", modal).value || "").trim().toLowerCase();
+            const role  = (qs("#u_ur_invite_role", modal).value || "member").trim();
+            if (!email) return setMsg("err", "Please enter an email.");
 
-          const email = (qs("#u_ur_invite_email", modal).value || "").trim().toLowerCase();
-          const role  = (qs("#u_ur_invite_role", modal).value || "member").trim();
+            const key = `${email}|${role}`;
+            if (inflightKey === key) return; // ignore same in-flight
+            inflightKey = key;
 
-          if (!email) {
-            inviteBtn.dataset.loading = "0";
-            return setMsg("err", "Please enter an email.");
-          }
+            if (inviteBtn.dataset.loading === "1") return;
+            inviteBtn.dataset.loading = "1";
 
-          try {
-            inviteBtn.disabled = true;
-            setMsg("ok", "");
+            try {
+              inviteBtn.disabled = true;
+              setMsg("ok", "");
 
-            await api._api.createInvite(email, role);
+              await api._api.createInvite(email, role);
 
-            setMsg("ok", `Invite sent to ${email} (${role}).`);
-            qs("#u_ur_invite_email", modal).value = "";
-            await api.refresh();
-          } catch (ex) {
-            err(ex);
-            const msg = ex?.message || String(ex);
-            const low = msg.toLowerCase();
-            if (low.includes("duplicate") || low.includes("already exists") || low.includes("409")) {
-              setMsg("err", `Invite already exists for ${email}.`);
-            } else {
-              setMsg("err", msg);
+              setMsg("ok", `Invite sent to ${email} (${role}).`);
+              qs("#u_ur_invite_email", modal).value = "";
+              await api.refresh();
+            } catch (ex) {
+              err(ex);
+              const msg = ex?.message || String(ex);
+              if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("already")) {
+                setMsg("err", `Invite already exists for ${email}.`);
+              } else {
+                setMsg("err", msg);
+              }
+            } finally {
+              inflightKey = null;
+              inviteBtn.dataset.loading = "0";
+              inviteBtn.disabled = false;
             }
-          } finally {
-            inviteBtn.dataset.loading = "0";
-            inviteBtn.disabled = false;
-          }
-        });
+          });
+        }
+
+        await api.refresh();
+      } catch (ex) {
+        err(ex);
+        setMsg("err", ex?.message || String(ex));
       }
+    },
 
-      await api.refresh();
-    } catch (ex) {
-      err(ex);
-      setMsg("err", ex?.message || String(ex));
-    }
-  }
+    async refresh() {
+      const sb = api._sb;
+      const ctx = api._ctx;
+      const modal = api._modal;
+      if (!sb || !ctx || !modal || !ctx.company_id) return;
 
-  async function refresh() {
-    const sb = api._sb;
-    const ctx = api._ctx;
-    const modal = api._modal;
-    if (!sb || !ctx || !modal) return;
-
-    try {
-      const [members, invites] = await Promise.all([
-        ctx.company_id ? loadMembers(sb, ctx.company_id) : Promise.resolve([]),
-        ctx.company_id ? loadInvites(sb, ctx.company_id) : Promise.resolve([]),
-      ]);
-      renderMembers(modal, ctx, members);
-      renderInvites(modal, ctx, invites);
-    } catch (ex) {
-      err(ex);
-      setMsg("err", ex?.message || String(ex));
-    }
-  }
-
-  const api = { open, refresh, _sb: null, _ctx: null, _modal: null, _api: null };
+      try {
+        const [members, invites] = await Promise.all([
+          loadMembers(sb, ctx.company_id),
+          loadInvites(sb, ctx.company_id),
+        ]);
+        renderMembers(modal, ctx, members);
+        renderInvites(modal, ctx, invites);
+      } catch (ex) {
+        err(ex);
+        setMsg("err", ex?.message || String(ex));
+      }
+    },
+  };
 
   window.UlydiaUsersRoles = api;
   window.UsersRoles = api;
 
-  log("loaded (v4.1). Call UlydiaUsersRoles.open()");
+  log("loaded (V4). Call UlydiaUsersRoles.open()");
 })();
-
-
