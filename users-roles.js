@@ -1,5 +1,7 @@
-/* users-roles.js — Ulydia Users & Roles (v1)
-   Usage: window.UlydiaUsersRoles.open({ supabase, token })
+/* users-roles.js — Ulydia Users & Roles (v2)
+   - Clean UI (no token shown)
+   - Works even if company_members has no "id" column
+   - Debug mode: add ?debug=1 to current page to display token/session
 */
 (function () {
   if (window.UlydiaUsersRoles?.open) return;
@@ -8,6 +10,8 @@
     overlayId: "u_ur_overlay",
     styleId: "u_ur_style",
   };
+
+  const ROLES = ["owner", "admin", "member"];
 
   function el(tag, attrs = {}, children = []) {
     const n = document.createElement(tag);
@@ -24,38 +28,145 @@
     return n;
   }
 
+  function qp(k){ return new URLSearchParams(location.search).get(k); }
+  function isDebug(){ return String(qp("debug") || "").trim() === "1"; }
+
   function injectStylesOnce() {
     if (document.getElementById(UI.styleId)) return;
+
+    // Style proche de ton dashboard (cards + boutons + typographie system)
     const css = `
-      #${UI.overlayId}{position:fixed;inset:0;z-index:999999;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:18px}
-      #${UI.overlayId} .card{width:min(1180px,96vw);background:#fff;border:1px solid #e5e7eb;border-radius:22px;box-shadow:0 24px 80px rgba(0,0,0,.25);overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
-      #${UI.overlayId} .top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 18px;border-bottom:1px solid #eef2f7}
-      #${UI.overlayId} .title{font-size:28px;font-weight:900;letter-spacing:-.02em}
-      #${UI.overlayId} .xbtn{width:44px;height:44px;border-radius:14px;border:1px solid #e5e7eb;background:#fff;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
-      #${UI.overlayId} .xbtn:hover{background:#f8fafc}
-      #${UI.overlayId} .body{padding:18px}
-      #${UI.overlayId} .grid{display:grid;grid-template-columns:1fr;gap:14px}
-      #${UI.overlayId} .panel{border:1px solid #e5e7eb;border-radius:18px;background:#fff;overflow:hidden}
-      #${UI.overlayId} .panel .ph{padding:14px 16px;border-bottom:1px solid #eef2f7;font-weight:900;font-size:18px}
-      #${UI.overlayId} .panel .pc{padding:14px 16px}
-      #${UI.overlayId} .muted{opacity:.75}
-      #${UI.overlayId} .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-      #${UI.overlayId} .tabs{display:flex;gap:10px;flex-wrap:wrap}
-      #${UI.overlayId} .tab{padding:10px 12px;border-radius:999px;border:1px solid #e5e7eb;background:#fff;font-weight:900;cursor:pointer}
-      #${UI.overlayId} .tab[data-active="1"]{background:#2563eb;border-color:#2563eb;color:#fff}
-      #${UI.overlayId} .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 12px;border-radius:12px;border:1px solid transparent;font-weight:900;cursor:pointer;background:#2563eb;color:#fff}
-      #${UI.overlayId} .btnGhost{background:#fff;color:#0f172a;border-color:#e5e7eb}
-      #${UI.overlayId} .btnDanger{background:#fff;color:#991b1b;border-color:#fecaca}
-      #${UI.overlayId} input, #${UI.overlayId} select{height:44px;border-radius:12px;border:1px solid #e5e7eb;padding:0 12px;font-weight:800;outline:none}
-      #${UI.overlayId} input:focus, #${UI.overlayId} select:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.15)}
-      #${UI.overlayId} table{width:100%;border-collapse:collapse}
-      #${UI.overlayId} th{font-size:12px;text-transform:uppercase;letter-spacing:.02em;opacity:.7;text-align:left;padding:12px 0;border-bottom:1px solid #eef2f7}
-      #${UI.overlayId} td{padding:14px 0;border-bottom:1px solid #f1f5f9;vertical-align:middle}
-      #${UI.overlayId} .pill{display:inline-flex;padding:6px 10px;border-radius:999px;border:1px solid #e5e7eb;font-weight:900;font-size:12px}
-      #${UI.overlayId} .err{padding:12px 14px;border-radius:14px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-weight:900}
-      #${UI.overlayId} .ok{padding:12px 14px;border-radius:14px;background:#ecfdf5;border:1px solid #bbf7d0;color:#065f46;font-weight:900}
-      @media (min-width: 980px){ #${UI.overlayId} .grid{grid-template-columns:1.1fr .9fr} }
+      #${UI.overlayId}{
+        position:fixed; inset:0; z-index:999999;
+        background:rgba(15,23,42,.45);
+        display:flex; align-items:center; justify-content:center;
+        padding:18px;
+        font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      }
+      #${UI.overlayId} .card{
+        width:min(1040px, 96vw);
+        background:#fff;
+        border:1px solid #e5e7eb;
+        border-radius:18px;
+        box-shadow:0 14px 40px rgba(15,23,42,.18);
+        overflow:hidden;
+      }
+      #${UI.overlayId} .top{
+        display:flex; align-items:center; justify-content:space-between; gap:12px;
+        padding:16px 16px;
+        border-bottom:1px solid #eef2f7;
+        background:#fafafa;
+      }
+      #${UI.overlayId} .title{
+        font-size:20px; font-weight:900; letter-spacing:-.01em;
+        color:#0f172a;
+      }
+      #${UI.overlayId} .sub{
+        font-size:12px; font-weight:800; opacity:.7; margin-top:2px;
+      }
+      #${UI.overlayId} .xbtn{
+        width:42px;height:42px;border-radius:14px;
+        border:1px solid #e5e7eb;background:#fff;cursor:pointer;
+        display:inline-flex;align-items:center;justify-content:center;
+      }
+      #${UI.overlayId} .xbtn:hover{ background:#f8fafc; }
+      #${UI.overlayId} .body{ padding:16px; }
+
+      #${UI.overlayId} .tabs{ display:flex; gap:10px; flex-wrap:wrap; }
+      #${UI.overlayId} .tab{
+        padding:10px 14px; border-radius:999px;
+        border:1px solid #e5e7eb; background:#fff;
+        font-weight:900; cursor:pointer;
+        color:#0f172a;
+      }
+      #${UI.overlayId} .tab[data-active="1"]{
+        background:#2563eb; border-color:#2563eb; color:#fff;
+      }
+
+      #${UI.overlayId} .panel{
+        border:1px solid #e5e7eb; border-radius:16px; overflow:hidden;
+        background:#fff;
+      }
+      #${UI.overlayId} .ph{
+        padding:14px 16px;
+        border-bottom:1px solid #eef2f7;
+        background:#fff;
+        display:flex; align-items:flex-end; justify-content:space-between; gap:12px;
+      }
+      #${UI.overlayId} .phL .h{
+        font-weight:900; font-size:16px; color:#0f172a;
+      }
+      #${UI.overlayId} .phL .p{
+        font-weight:800; font-size:12px; opacity:.7; margin-top:3px;
+      }
+      #${UI.overlayId} .pc{ padding:14px 16px; }
+
+      #${UI.overlayId} .btn{
+        display:inline-flex; align-items:center; justify-content:center;
+        padding:10px 12px; border-radius:12px;
+        font-weight:900; font-size:13px;
+        border:1px solid transparent; cursor:pointer;
+        user-select:none;
+      }
+      #${UI.overlayId} .btnPrimary{ background:#2563eb; color:#fff; }
+      #${UI.overlayId} .btnGhost{ background:#fff; color:#0f172a; border-color:#e5e7eb; }
+      #${UI.overlayId} .btnDanger{ background:#fff; color:#991b1b; border-color:#fecaca; }
+
+      #${UI.overlayId} input, #${UI.overlayId} select{
+        height:44px; border-radius:12px;
+        border:1px solid #e5e7eb;
+        padding:0 12px;
+        font-weight:800;
+        outline:none;
+      }
+      #${UI.overlayId} input:focus, #${UI.overlayId} select:focus{
+        border-color:#2563eb;
+        box-shadow:0 0 0 3px rgba(37,99,235,.15);
+      }
+
+      #${UI.overlayId} table{ width:100%; border-collapse:collapse; }
+      #${UI.overlayId} th{
+        font-size:12px; text-transform:uppercase; letter-spacing:.02em;
+        opacity:.7; text-align:left;
+        padding:12px 0;
+        border-bottom:1px solid #eef2f7;
+      }
+      #${UI.overlayId} td{
+        padding:14px 0;
+        border-bottom:1px solid #f1f5f9;
+        vertical-align:middle;
+      }
+      #${UI.overlayId} .pill{
+        display:inline-flex;
+        padding:6px 10px;
+        border-radius:999px;
+        border:1px solid #e5e7eb;
+        font-weight:900;
+        font-size:12px;
+      }
+      #${UI.overlayId} .err{
+        padding:12px 14px;
+        border-radius:14px;
+        background:#fef2f2;
+        border:1px solid #fecaca;
+        color:#991b1b;
+        font-weight:900;
+      }
+      #${UI.overlayId} .muted{
+        opacity:.75;
+        font-weight:800;
+      }
+
+      #${UI.overlayId} .row{
+        display:flex; gap:10px; flex-wrap:wrap;
+        align-items:center; justify-content:space-between;
+      }
+
+      @media (max-width: 780px){
+        #${UI.overlayId} .ph{ align-items:flex-start; flex-direction:column; }
+      }
     `;
+
     const st = document.createElement("style");
     st.id = UI.styleId;
     st.textContent = css;
@@ -64,7 +175,7 @@
 
   function iconX() {
     return `
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
         stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
         <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
       </svg>`;
@@ -77,7 +188,7 @@
       const { data, error } = await sb.auth.getSession();
       if (error) return { session:null, error };
       return { session:data?.session || null, error:null };
-    } catch(e){
+    }catch(e){
       return { session:null, error:e };
     }
   }
@@ -87,7 +198,7 @@
     if (!t) throw new Error("Missing token");
     const res = await sb
       .from("companies")
-      .select("id,name,slug,manage_token,created_at")
+      .select("id,name,slug,manage_token")
       .eq("manage_token", t)
       .maybeSingle();
     if (res.error) throw res.error;
@@ -95,14 +206,13 @@
     return res.data;
   }
 
+  // ✅ IMPORTANT: no "id" here
   async function listMembers(sb, companyId){
-    // Try to pick email if you have it; fallback on user_id.
-    // Recommended column: company_members.user_email
     const res = await sb
       .from("company_members")
-      .select("id,user_id,user_email,role,created_at")
+      .select("company_id,user_id,user_email,role,created_at")
       .eq("company_id", companyId)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending:true });
     if (res.error) throw res.error;
     return Array.isArray(res.data) ? res.data : [];
   }
@@ -110,9 +220,9 @@
   async function listInvites(sb, companyId){
     const res = await sb
       .from("company_invites")
-      .select("id,email,role,status,created_at,invited_by")
+      .select("id,company_id,email,role,status,created_at")
       .eq("company_id", companyId)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending:false });
     if (res.error) throw res.error;
     return Array.isArray(res.data) ? res.data : [];
   }
@@ -126,33 +236,42 @@
       email: e,
       role: r,
       status: "pending"
-    }).select("id").maybeSingle();
+    });
     if (res.error) throw res.error;
-    return res.data;
+    return true;
   }
 
-  async function updateMemberRole(sb, memberId, role){
+  // ✅ Update using (company_id + user_id) instead of id
+  async function updateMemberRole(sb, companyId, userId, role){
     const r = String(role||"member").trim() || "member";
-    const res = await sb.from("company_members").update({ role: r }).eq("id", memberId);
+    const res = await sb
+      .from("company_members")
+      .update({ role: r })
+      .eq("company_id", companyId)
+      .eq("user_id", userId);
     if (res.error) throw res.error;
     return true;
   }
 
-  async function removeMember(sb, memberId){
-    const res = await sb.from("company_members").delete().eq("id", memberId);
+  async function removeMember(sb, companyId, userId){
+    const res = await sb
+      .from("company_members")
+      .delete()
+      .eq("company_id", companyId)
+      .eq("user_id", userId);
     if (res.error) throw res.error;
     return true;
   }
 
-  async function cancelInvite(sb, inviteId){
+  async function deleteInvite(sb, inviteId){
     const res = await sb.from("company_invites").delete().eq("id", inviteId);
     if (res.error) throw res.error;
     return true;
   }
 
-  // Optional: "resend" by setting status back to pending + bump updated_at if you have it
   async function resendInvite(sb, inviteId){
-    const res = await sb.from("company_invites").update({ status: "pending" }).eq("id", inviteId);
+    // Simple resend marker: set status back to pending
+    const res = await sb.from("company_invites").update({ status:"pending" }).eq("id", inviteId);
     if (res.error) throw res.error;
     return true;
   }
@@ -167,17 +286,19 @@
     injectStylesOnce();
 
     const overlay = el("div", { id: UI.overlayId });
-    const card = el("div", { class: "card" });
+    const card = el("div", { class:"card" });
 
     const closeBtn = el("button", { class:"xbtn", type:"button" });
     closeBtn.innerHTML = iconX();
 
-    const top = el("div", { class:"top" }, [
+    const left = el("div", {}, [
       el("div", { class:"title" }, "Users & Roles"),
-      closeBtn
+      el("div", { class:"sub" }, "Manage access for your company")
     ]);
 
+    const top = el("div", { class:"top" }, [ left, closeBtn ]);
     const body = el("div", { class:"body" });
+
     card.appendChild(top);
     card.appendChild(body);
     overlay.appendChild(card);
@@ -197,43 +318,13 @@
     return { overlay, body, close };
   }
 
-  function renderInfoPanel({ sessionEmail, token, msgNode }) {
-    return el("div", { class:"panel" }, [
-      el("div", { class:"ph" }, "Session"),
-      el("div", { class:"pc" }, [
-        el("div", { class:"muted", style:"font-weight:900" }, `Signed in as ${sessionEmail || "—"}`),
-      ]),
-      el("div", { class:"ph" }, "Dashboard token"),
-      el("div", { class:"pc" }, [
-        el("div", { style:"font-weight:900;word-break:break-all" }, token || "—"),
-      ]),
-      el("div", { class:"ph" }, "Status"),
-      el("div", { class:"pc" }, msgNode),
-    ]);
-  }
-
-  function renderMainPanel(){
-    const tabs = el("div", { class:"tabs" }, [
-      el("button", { class:"tab", type:"button", "data-tab":"members", "data-active":"1" }, "Members"),
-      el("button", { class:"tab", type:"button", "data-tab":"invites" }, "Invites"),
-    ]);
-
-    const slot = el("div", { style:"margin-top:14px" });
-    const panel = el("div", { class:"panel" }, [
-      el("div", { class:"ph" }, "Manage"),
-      el("div", { class:"pc" }, [tabs, slot]),
-    ]);
-
-    return { panel, tabs, slot };
-  }
-
   function setActiveTab(tabsEl, name){
     Array.from(tabsEl.querySelectorAll(".tab")).forEach(b => {
       b.dataset.active = (b.dataset.tab === name) ? "1" : "0";
     });
   }
 
-  function renderMembers(slot, members, onRoleChange, onRemove){
+  function renderMembers(slot, companyId, members, onRoleChange, onRemove){
     const table = el("table", {}, [
       el("thead", {}, el("tr", {}, [
         el("th", {}, "User"),
@@ -243,11 +334,11 @@
       ])),
       el("tbody", {}, members.map(m => {
         const userText = (m.user_email && String(m.user_email).includes("@")) ? m.user_email : (m.user_id || "—");
-        const roleSel = el("select", {}, [
-          el("option", { value:"owner", selected: String(m.role||"") === "owner" ? "selected" : null }, "owner"),
-          el("option", { value:"admin", selected: String(m.role||"") === "admin" ? "selected" : null }, "admin"),
-          el("option", { value:"member", selected: (!m.role || String(m.role) === "member") ? "selected" : null }, "member"),
-        ]);
+        const roleSel = el("select", {}, ROLES.map(r => el("option", {
+          value:r,
+          selected: String(m.role||"member") === r ? "selected" : null
+        }, r)));
+
         roleSel.addEventListener("change", () => onRoleChange(m, roleSel.value));
 
         const rm = el("button", { class:"btn btnDanger", type:"button" }, "Remove");
@@ -264,34 +355,33 @@
 
     slot.innerHTML = "";
     if (!members.length){
-      slot.appendChild(el("div", { class:"muted", style:"font-weight:900" }, "No members found."));
+      slot.appendChild(el("div", { class:"muted" }, "No members found."));
       return;
     }
     slot.appendChild(table);
 
-    // Note if emails missing
     const missingEmails = members.some(m => !m.user_email);
     if (missingEmails){
-      slot.appendChild(el("div", { class:"muted", style:"margin-top:10px;font-weight:900" },
-        "Note: member emails are not available (missing company_members.user_email). Showing user_id instead."
+      slot.appendChild(el("div", { class:"muted", style:"margin-top:10px" },
+        "Note: emails are not stored for members yet (showing user_id)."
       ));
     }
   }
 
-  function renderInvites(slot, invites, onInvite, onCancel, onResend){
+  function renderInvites(slot, invites, onInvite, onDelete, onResend){
     const email = el("input", { placeholder:"email@company.com", type:"email", style:"width:320px;max-width:100%" });
     const role  = el("select", {}, [
       el("option", { value:"member" }, "member"),
       el("option", { value:"admin" }, "admin"),
     ]);
-    const btn = el("button", { class:"btn", type:"button" }, "Send invite");
-
-    const formRow = el("div", { class:"row", style:"gap:10px" }, [
-      el("div", { style:"display:flex;gap:10px;flex-wrap:wrap;align-items:center" }, [email, role, btn]),
-      el("div", { class:"muted", style:"font-weight:900" }, "Invites create a pending row; acceptance flow handled by your app.")
-    ]);
+    const btn = el("button", { class:"btn btnPrimary", type:"button" }, "Send invite");
 
     btn.addEventListener("click", () => onInvite(email.value, role.value));
+
+    const form = el("div", { class:"row" }, [
+      el("div", { style:"display:flex;gap:10px;flex-wrap:wrap;align-items:center" }, [email, role, btn]),
+      el("div", { class:"muted" }, "Invites create a pending access request.")
+    ]);
 
     const table = el("table", { style:"margin-top:14px" }, [
       el("thead", {}, el("tr", {}, [
@@ -302,8 +392,8 @@
         el("th", {}, "Actions"),
       ])),
       el("tbody", {}, invites.map(inv => {
-        const cancel = el("button", { class:"btn btnDanger", type:"button" }, "Delete");
-        cancel.addEventListener("click", () => onCancel(inv));
+        const del = el("button", { class:"btn btnDanger", type:"button" }, "Delete");
+        del.addEventListener("click", () => onDelete(inv));
 
         const resend = el("button", { class:"btn btnGhost", type:"button" }, "Resend");
         resend.addEventListener("click", () => onResend(inv));
@@ -313,16 +403,16 @@
           el("td", {}, el("span", { class:"pill" }, inv.role || "member")),
           el("td", {}, el("span", { class:"pill" }, inv.status || "pending")),
           el("td", {}, el("span", { class:"pill" }, fmtDate(inv.created_at))),
-          el("td", {}, el("div", { style:"display:flex;gap:10px;flex-wrap:wrap" }, [resend, cancel])),
+          el("td", {}, el("div", { style:"display:flex;gap:10px;flex-wrap:wrap" }, [resend, del])),
         ]);
       }))
     ]);
 
     slot.innerHTML = "";
-    slot.appendChild(formRow);
+    slot.appendChild(form);
 
     if (!invites.length){
-      slot.appendChild(el("div", { class:"muted", style:"margin-top:12px;font-weight:900" }, "No invites yet."));
+      slot.appendChild(el("div", { class:"muted", style:"margin-top:12px" }, "No invites yet."));
       return;
     }
     slot.appendChild(table);
@@ -333,36 +423,59 @@
     const tkn = String(token || "").trim();
     const modal = buildModalShell();
 
-    const msgNode = el("div", { class:"muted", style:"font-weight:900" }, "Loading…");
+    const panel = el("div", { class:"panel" });
+    const header = el("div", { class:"ph" });
+    const headerLeft = el("div", { class:"phL" });
+    const headerRight = el("div", { style:"display:flex;gap:10px;flex-wrap:wrap;align-items:center" });
 
-    // Left info panel
-    const { session } = await safeSession(sb || { auth:{ getSession: async()=>({data:{session:null}}) } });
-    const sessionEmail = session?.user?.email || "";
-
-    // Main right panel
-    const main = renderMainPanel();
-
-    const root = el("div", { class:"grid" }, [
-      renderInfoPanel({ sessionEmail, token: tkn, msgNode }),
-      main.panel
+    const tabs = el("div", { class:"tabs" }, [
+      el("button", { class:"tab", type:"button", "data-tab":"members", "data-active":"1" }, "Members"),
+      el("button", { class:"tab", type:"button", "data-tab":"invites" }, "Invites"),
     ]);
 
-    modal.body.appendChild(root);
+    const statusLine = el("div", { class:"muted" }, "Connecting…");
+    const slot = el("div", {});
+
+    headerLeft.appendChild(el("div", { class:"h" }, "Manage"));
+    headerLeft.appendChild(el("div", { class:"p" }, "Members list and invitations"));
+    headerRight.appendChild(tabs);
+
+    header.appendChild(headerLeft);
+    header.appendChild(headerRight);
+
+    const content = el("div", { class:"pc" }, [statusLine, el("div", { style:"height:12px" }), slot]);
+    panel.appendChild(header);
+    panel.appendChild(content);
+
+    modal.body.appendChild(panel);
 
     if (!sb || !sb.from) {
-      msgNode.className = "err";
-      msgNode.textContent = "Supabase client missing. Please open from dashboard script with { supabase }.";
-      main.slot.innerHTML = "";
-      main.slot.appendChild(el("div", { class:"err" }, "Cannot continue without Supabase."));
+      statusLine.className = "err";
+      statusLine.textContent = "Supabase client missing. Open from dashboard with { supabase }.";
+      return;
+    }
+    if (!tkn) {
+      statusLine.className = "err";
+      statusLine.textContent = "Missing dashboard token.";
       return;
     }
 
-    if (!tkn) {
-      msgNode.className = "err";
-      msgNode.textContent = "Missing dashboard token.";
-      main.slot.innerHTML = "";
-      main.slot.appendChild(el("div", { class:"err" }, "Cannot continue without token."));
-      return;
+    // Optional debug block (hidden by default)
+    if (isDebug()) {
+      const { session } = await safeSession(sb);
+      const dbg = el("div", { class:"panel", style:"margin-top:14px" }, [
+        el("div", { class:"ph" }, [
+          el("div", { class:"phL" }, [
+            el("div", { class:"h" }, "Debug"),
+            el("div", { class:"p" }, "Visible only with ?debug=1"),
+          ]),
+        ]),
+        el("div", { class:"pc" }, [
+          el("div", { class:"muted", style:"font-weight:900" }, `Signed in: ${session?.user?.email || "—"}`),
+          el("div", { class:"muted", style:"margin-top:8px;font-weight:900;word-break:break-all" }, `Token: ${tkn}`),
+        ])
+      ]);
+      modal.body.appendChild(dbg);
     }
 
     let company = null;
@@ -370,30 +483,30 @@
     let invites = [];
 
     async function refreshAll(){
-      msgNode.className = "muted";
-      msgNode.textContent = "Loading company & lists…";
+      statusLine.className = "muted";
+      statusLine.textContent = "Loading…";
 
       company = await getCompanyByToken(sb, tkn);
       members = await listMembers(sb, company.id);
       invites = await listInvites(sb, company.id);
 
-      msgNode.className = "ok";
-      msgNode.textContent = `Connected to company: ${company.name || company.slug || company.id}`;
-
-      // render current tab
-      const active = main.tabs.querySelector('.tab[data-active="1"]')?.dataset?.tab || "members";
-      renderTab(active);
+      statusLine.className = "muted";
+      statusLine.textContent = `Company: ${company.name || company.slug || company.id}`;
+      renderTab(tabs.querySelector('.tab[data-active="1"]')?.dataset?.tab || "members");
     }
 
     function renderTab(name){
-      setActiveTab(main.tabs, name);
+      setActiveTab(tabs, name);
+      slot.innerHTML = "";
+
       if (name === "members") {
         renderMembers(
-          main.slot,
+          slot,
+          company.id,
           members,
           async (m, newRole) => {
             try{
-              await updateMemberRole(sb, m.id, newRole);
+              await updateMemberRole(sb, company.id, m.user_id, newRole);
               await refreshAll();
             }catch(e){
               alert("Role update failed: " + (e?.message || e));
@@ -403,7 +516,7 @@
             const ok = confirm("Remove this member from the company?");
             if (!ok) return;
             try{
-              await removeMember(sb, m.id);
+              await removeMember(sb, company.id, m.user_id);
               await refreshAll();
             }catch(e){
               alert("Remove failed: " + (e?.message || e));
@@ -412,7 +525,7 @@
         );
       } else {
         renderInvites(
-          main.slot,
+          slot,
           invites,
           async (email, role) => {
             try{
@@ -426,10 +539,10 @@
             const ok = confirm("Delete this invite?");
             if (!ok) return;
             try{
-              await cancelInvite(sb, inv.id);
+              await deleteInvite(sb, inv.id);
               await refreshAll();
             }catch(e){
-              alert("Delete invite failed: " + (e?.message || e));
+              alert("Delete failed: " + (e?.message || e));
             }
           },
           async (inv) => {
@@ -444,21 +557,20 @@
       }
     }
 
-    main.tabs.addEventListener("click", (e) => {
+    tabs.addEventListener("click", (e) => {
       const b = e.target.closest(".tab");
       if (!b) return;
-      const tab = b.dataset.tab;
-      renderTab(tab);
+      renderTab(b.dataset.tab);
     });
 
     try{
       await refreshAll();
     }catch(e){
       console.warn("[Users&Roles] init error:", e);
-      msgNode.className = "err";
-      msgNode.textContent = "Failed to connect. Check RLS and table names.";
-      main.slot.innerHTML = "";
-      main.slot.appendChild(el("div", { class:"err" }, String(e?.message || e)));
+      statusLine.className = "err";
+      statusLine.textContent = "Failed to connect. Check RLS and table names.";
+      slot.innerHTML = "";
+      slot.appendChild(el("div", { class:"err" }, String(e?.message || e)));
     }
   }
 
