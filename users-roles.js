@@ -8,8 +8,9 @@
    - Exposes window.UlydiaUsersRoles.open() + window.UsersRoles.open() (compat)
 */
 (() => {
-  if (window.__ULYDIA_USERS_ROLES_V3__) return;
-  window.__ULYDIA_USERS_ROLES_V3__ = true;
+    if (window.__ULYDIA_USERS_ROLES_V4__) return;
+    window.__ULYDIA_USERS_ROLES_V4__ = true;
+
 
   const NS = "[Users&Roles]";
 
@@ -180,51 +181,48 @@
   }
 
   // ---------- Data layer (RLS-first, tokenless) ----------
-  async function rpcMyCompanyIds(sb) {
-    // Fallbacks depending on what exists / schema cache
-    // - my_company_ids_arr() → returns uuid[]
-    // - my_company_ids()     → could return setof uuid / uuid[]
-    let lastErr = null;
+async function rpcMyCompanyIds(sb, user) {
+  // 1) Try RPCs (if exposed in PostgREST)
+  let lastErr = null;
+  for (const fn of ["my_company_ids_arr", "my_company_ids"]) {
+    try {
+      const { data, error } = await sb.rpc(fn);
+      if (error) throw error;
 
-    for (const fn of ["my_company_ids_arr", "my_company_ids"]) {
-      try {
-        const { data, error } = await sb.rpc(fn);
-        if (error) throw error;
-
-        // normalize to array of uuid strings
-        if (Array.isArray(data)) return data;
-        if (data == null) return [];
-        // Sometimes PostgREST returns scalar for single row; normalize
-        return [data];
-      } catch (e) {
-        lastErr = e;
-      }
+      if (Array.isArray(data)) return data.filter(Boolean);
+      if (data == null) return [];
+      return [data];
+    } catch (e) {
+      lastErr = e;
     }
-    throw lastErr || new Error("Could not load company ids (no RPC found).");
   }
 
-  async function rpcIsCompanyAdmin(sb, company_id) {
-    // Try with correct param name first, then fallback to cid
-    let lastErr = null;
+  // 2) ✅ Fallback (NO RPC): read from company_members (RLS-driven)
+  // Requires a SELECT policy on company_members allowing user to see their own rows.
+  try {
+    const { data, error } = await sb
+      .from("company_members")
+      .select("company_id")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true });
 
-    for (const payload of [{ p_company_id: company_id }, { cid: company_id }]) {
-      try {
-        const { data, error } = await sb.rpc("is_company_admin", payload);
-        if (error) throw error;
-        return !!data;
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-    throw lastErr || new Error("Could not check admin status.");
+    if (error) throw error;
+    const ids = (data || []).map(r => r.company_id).filter(Boolean);
+    // unique
+    return Array.from(new Set(ids));
+  } catch (e2) {
+    // Keep the original RPC error as context if useful
+    throw lastErr || e2;
   }
+}
+
 
   async function getContext(sb) {
     const { data: { user }, error } = await sb.auth.getUser();
     if (error) throw error;
     if (!user) return { user: null, company_id: null, is_admin: false, my_companies: [] };
 
-    const my_companies = await rpcMyCompanyIds(sb);
+    const my_companies = await rpcMyCompanyIds(sb, user);
     const company_id = my_companies[0] || null;
 
     let is_admin = false;
