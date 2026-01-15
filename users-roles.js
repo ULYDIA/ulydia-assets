@@ -1,36 +1,31 @@
-/* users-roles.js — Ulydia (PATCHED v3.1, tokenless, single Supabase client)
-   - Reuses existing global Supabase client (prevents "Multiple GoTrueClient instances")
-   - Works WITHOUT dashboard token when user is authenticated (RLS-driven)
-   - Always releases overlay (no more frozen page)
-   - Uses RPC create_company_invite (as requested)
-   - Adds hard anti-duplicate guard for invites (prevents "rafale")
-   - Fixes getContext() (companyId typo, RPC param names, RPC fallback)
-   - Exposes window.UlydiaUsersRoles.open() + window.UsersRoles.open() (compat)
+/* users-roles.js — Ulydia (V4, tokenless, single Supabase client)
+   - Reuses global Supabase client (prevents Multiple GoTrueClient)
+   - Works WITHOUT dashboard token (auth + RLS)
+   - Uses RPC create_company_invite
+   - Optional RPC is_company_admin (fallback on company_members.role)
+   - Hard anti-duplicate guard (prevents "rafale" invites)
+   - Never freezes overlay
+   - Exposes window.UlydiaUsersRoles.open() + window.UsersRoles.open()
 */
 (() => {
-    if (window.__ULYDIA_USERS_ROLES_V4__) return;
-    window.__ULYDIA_USERS_ROLES_V4__ = true;
-
+  if (window.__ULYDIA_USERS_ROLES_V4__) return;
+  window.__ULYDIA_USERS_ROLES_V4__ = true;
 
   const NS = "[Users&Roles]";
 
-  // ---------- Small helpers ----------
-  const qs = (sel, root = document) => root.querySelector(sel);
+  // ---------- helpers ----------
+  const qs  = (sel, root = document) => root.querySelector(sel);
   const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
   function log(...a){ console.log(NS, ...a); }
   function warn(...a){ console.warn(NS, ...a); }
   function err(...a){ console.error(NS, ...a); }
 
-  // ---------- Get the SINGLE Supabase client ----------
+  // ---------- Supabase (SINGLE client) ----------
   function getSupabase() {
-    // 1) Prefer the client created by your my-account script
     if (window.__ULYDIA_SUPABASE__) return window.__ULYDIA_SUPABASE__;
-
-    // 2) Common alternates (if you named it differently)
     if (window._ULYDIA_SUPABASE_) return window._ULYDIA_SUPABASE_;
 
-    // 3) Last resort: create one ONLY IF config is provided
     const cfg = window.ULYDIA_USERS_ROLES_CONFIG || window.__ULYDIA_CONFIG__ || {};
     const SUPABASE_URL = cfg.SUPABASE_URL;
     const SUPABASE_ANON_KEY = cfg.SUPABASE_ANON_KEY;
@@ -48,7 +43,7 @@
     return client;
   }
 
-  // ---------- UI (modal + overlay) ----------
+  // ---------- UI ----------
   function mountStyles() {
     if (document.getElementById("u_users_roles_css")) return;
     const s = document.createElement("style");
@@ -145,7 +140,10 @@
       </div>
     `;
 
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+
     const close = () => {
+      try { window.removeEventListener("keydown", onKey); } catch {}
       try { backdrop.remove(); } catch {}
       try { modal.remove(); } catch {}
       document.documentElement.style.overflow = "";
@@ -153,10 +151,7 @@
 
     qs(".u-ur-close", modal).addEventListener("click", close);
     backdrop.addEventListener("click", close);
-
-    // ESC
-    const onKey = (e) => { if (e.key === "Escape") close(); };
-    window.addEventListener("keydown", onKey, { once: true });
+    window.addEventListener("keydown", onKey);
 
     document.body.appendChild(backdrop);
     document.body.appendChild(modal);
@@ -180,93 +175,58 @@
     qs("#u_ur_invites_panel", modal).style.display  = tab === "invites" ? "block" : "none";
   }
 
-  // ---------- Data layer (RLS-first, tokenless) ----------
-async function rpcMyCompanyIds(sb, user) {
-  // 1) Try RPCs (if exposed in PostgREST)
-  let lastErr = null;
-  for (const fn of ["my_company_ids_arr", "my_company_ids"]) {
-    try {
-      const { data, error } = await sb.rpc(fn);
-      if (error) throw error;
-
-      if (Array.isArray(data)) return data.filter(Boolean);
-      if (data == null) return [];
-      return [data];
-    } catch (e) {
-      lastErr = e;
-    }
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
   }
 
-  // 2) ✅ Fallback (NO RPC): read from company_members (RLS-driven)
-  // Requires a SELECT policy on company_members allowing user to see their own rows.
-  try {
+  // ---------- Data layer (auth + RLS) ----------
+  async function getMyCompanyRows(sb, userId) {
     const { data, error } = await sb
       .from("company_members")
-      .select("company_id")
-      .eq("user_id", user.id)
+      .select("company_id, role, created_at")
+      .eq("user_id", userId)
       .order("created_at", { ascending: true });
 
     if (error) throw error;
-    const ids = (data || []).map(r => r.company_id).filter(Boolean);
-    // unique
-    return Array.from(new Set(ids));
-  } catch (e2) {
-    // Keep the original RPC error as context if useful
-    throw lastErr || e2;
+    return data || [];
   }
-}
 
-async function getMyCompanyRows(sb, userId) {
-  const { data, error } = await sb
-    .from("company_members")
-    .select("company_id, role, created_at")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: true });
+  async function rpcIsCompanyAdmin(sb, company_id) {
+    // Optional: if function exists/exposed; otherwise returns null (never blocks)
+    try {
+      const { data, error } = await sb.rpc("is_company_admin", { p_company_id: company_id });
+      if (error) throw error;
+      return !!data;
+    } catch (_) {
+      return null;
+    }
+  }
 
-  if (error) throw error;
-  return data || [];
-}
-
-async function rpcIsCompanyAdmin(sb, company_id) {
-  // Optionnel : si tu as la RPC exposée, on l’utilise.
-  // Sinon, on retourne null (et on ne bloque jamais)
-  try {
-    // IMPORTANT: ton paramètre côté SQL doit être p_company_id (pas cid)
-    const { data, error } = await sb.rpc("is_company_admin", { p_company_id: company_id });
+  async function getContext(sb) {
+    const { data: { user }, error } = await sb.auth.getUser();
     if (error) throw error;
-    return !!data;
-  } catch (e) {
-    return null;
+    if (!user) return { user: null, company_id: null, is_admin: false, my_companies: [] };
+
+    const rows = await getMyCompanyRows(sb, user.id);
+
+    const my_companies = rows.map(r => r.company_id).filter(Boolean);
+    const company_id = my_companies[0] || null;
+
+    const myRole = rows.find(r => String(r.company_id) === String(company_id))?.role || null;
+    let is_admin = (myRole === "admin");
+
+    if (company_id) {
+      const rpcVal = await rpcIsCompanyAdmin(sb, company_id);
+      if (rpcVal !== null) is_admin = rpcVal;
+    }
+
+    return { user, company_id, is_admin, my_companies };
   }
-}
-
-
-
-
-async function getContext(sb) {
-  const { data: { user }, error } = await sb.auth.getUser();
-  if (error) throw error;
-  if (!user) return { user: null, company_id: null, is_admin: false, my_companies: [] };
-
-  // ✅ Source of truth: company_members
-  const rows = await getMyCompanyRows(sb, user.id);
-
-  const my_companies = rows.map(r => r.company_id).filter(Boolean);
-  const company_id = my_companies[0] || null;
-
-  // ✅ Admin simple & robuste (sans RPC) : rôle dans company_members
-  const myRole = rows.find(r => String(r.company_id) === String(company_id))?.role || null;
-  let is_admin = (myRole === "admin");
-
-  // (optionnel) si RPC dispo, elle peut confirmer (sans casser si absente)
-  if (company_id) {
-    const rpcVal = await rpcIsCompanyAdmin(sb, company_id);
-    if (rpcVal !== null) is_admin = rpcVal;
-  }
-
-  return { user, company_id, is_admin, my_companies };
-}
-
 
   async function loadMembers(sb, company_id) {
     const { data, error } = await sb
@@ -274,7 +234,6 @@ async function getContext(sb) {
       .select("user_id, user_email, role, created_at")
       .eq("company_id", company_id)
       .order("created_at", { ascending: true });
-
     if (error) throw error;
     return data || [];
   }
@@ -285,7 +244,6 @@ async function getContext(sb) {
       .select("id, email, role, status, created_at")
       .eq("company_id", company_id)
       .order("created_at", { ascending: false });
-
     if (error) throw error;
     return data || [];
   }
@@ -311,7 +269,7 @@ async function getContext(sb) {
     if (error) throw error;
   }
 
-  // ✅ Uses RPC create_company_invite (as requested)
+  // ✅ RPC create_company_invite
   async function createInviteRPC(sb, company_id, email, role) {
     const p_email = String(email || "").trim().toLowerCase();
     const p_role = String(role || "member").trim();
@@ -319,9 +277,7 @@ async function getContext(sb) {
 
     const { data, error } = await sb.rpc("create_company_invite", { p_email, p_role, p_company_id });
     if (error) throw error;
-
-    // data may be token/uuid or null depending on your function
-    return data;
+    return data; // may be token/uuid or null depending on your SQL
   }
 
   async function cancelInvite(sb, invite_id) {
@@ -343,6 +299,7 @@ async function getContext(sb) {
     members.forEach((m) => {
       const tr = document.createElement("tr");
       const email = m.user_email || "(no email)";
+
       tr.innerHTML = `
         <td>${escapeHtml(email)}</td>
         <td>${escapeHtml(m.role || "")}</td>
@@ -355,10 +312,9 @@ async function getContext(sb) {
         </td>
       `;
 
-      const canEdit = ctx.is_admin;
+      const canEdit = !!ctx.is_admin;
       qsa("button", tr).forEach((b) => { if (!canEdit) b.disabled = true; });
 
-      // You can’t remove yourself
       if (String(m.user_id) === String(me)) {
         const btnRemove = qs('button[data-act="remove"]', tr);
         if (btnRemove) btnRemove.disabled = true;
@@ -369,11 +325,9 @@ async function getContext(sb) {
         if (!btn) return;
         if (!ctx.is_admin) return;
 
-        // ✅ stop bubbling to avoid weird double-trigger in some layouts
         e.preventDefault();
         e.stopPropagation();
 
-        // ✅ anti double click on action buttons
         if (btn.dataset.loading === "1") return;
         btn.dataset.loading = "1";
 
@@ -431,7 +385,7 @@ async function getContext(sb) {
         </td>
       `;
 
-      const canEdit = ctx.is_admin;
+      const canEdit = !!ctx.is_admin;
       qsa("button", tr).forEach((b) => { if (!canEdit) b.disabled = true; });
 
       tr.addEventListener("click", async (e) => {
@@ -470,16 +424,7 @@ async function getContext(sb) {
     }
   }
 
-  function escapeHtml(s) {
-    return String(s ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
-  }
-
-  // ---------- Main open() ----------
+  // ---------- Public open/refresh ----------
   async function open() {
     const { modal, close } = createModal();
 
@@ -490,13 +435,11 @@ async function getContext(sb) {
     try {
       const sb = getSupabase();
 
-      // Load ctx (tokenless, auth-based)
       const ctx = await getContext(sb);
       window.UlydiaUsersRoles._sb = sb;
       window.UlydiaUsersRoles._ctx = ctx;
       window.UlydiaUsersRoles._modal = modal;
 
-      // Store api bindings for render handlers
       window.UlydiaUsersRoles._api = {
         upsertMemberRole: (user_id, role, user_email) =>
           upsertMemberRole(sb, window.UlydiaUsersRoles._ctx.company_id, user_id, role, user_email),
@@ -505,27 +448,24 @@ async function getContext(sb) {
         cancelInvite: (invite_id) =>
           cancelInvite(sb, invite_id),
 
-        // ✅ expose createInvite too (debug)
-        createInvite: (email, role) =>
+        // invite via RPC
+        _createInviteRaw: (email, role) =>
           createInviteRPC(sb, window.UlydiaUsersRoles._ctx.company_id, email, role),
       };
 
-      // ✅ HARD GUARD (anti “rafale”) at API level
+      // ✅ HARD anti-rafale (in-flight key)
       if (!window.UlydiaUsersRoles._api.__inviteGuardPatched) {
         window.UlydiaUsersRoles._api.__inviteGuardPatched = true;
 
-        const original = window.UlydiaUsersRoles._api.createInvite.bind(window.UlydiaUsersRoles._api);
         let inFlightKey = null;
-
         window.UlydiaUsersRoles._api.createInvite = async (email, role) => {
           const e = String(email || "").trim().toLowerCase();
-          const r = String(role || "").trim();
+          const r = String(role || "member").trim();
           const key = `${e}|${r}`;
-
-          if (inFlightKey === key) return null; // ignore duplicate in-flight
+          if (inFlightKey === key) return null;
           inFlightKey = key;
           try {
-            return await original(e, r);
+            return await window.UlydiaUsersRoles._api._createInviteRaw(e, r);
           } finally {
             inFlightKey = null;
           }
@@ -534,24 +474,19 @@ async function getContext(sb) {
 
       if (!ctx.user) {
         setMsg("err", "You must be logged in to manage users.");
-        return;
+        return { close };
       }
 
       if (!ctx.company_id) {
         setMsg("err", "No company linked to this account (company_members empty).");
-        return;
+        return { close };
       }
 
-      if (!ctx.is_admin) {
-        setMsg("ok", "You are a member (read-only). Ask an admin to change roles.");
-      } else {
-        setMsg("ok", "Admin access confirmed.");
-      }
+      setMsg("ok", ctx.is_admin ? "Admin access confirmed." : "You are a member (read-only). Ask an admin to change roles.");
 
-      // Invite button
+      // Invite button (bound once per modal instance)
       const inviteBtn = qs("#u_ur_invite_btn", modal);
 
-      // ✅ bind once per modal instance
       if (!inviteBtn.dataset.bound) {
         inviteBtn.dataset.bound = "1";
 
@@ -559,9 +494,8 @@ async function getContext(sb) {
           e.preventDefault();
           e.stopPropagation();
 
-          if (!ctx.is_admin) return;
+          if (!window.UlydiaUsersRoles._ctx?.is_admin) return;
 
-          // ✅ anti double click
           if (inviteBtn.dataset.loading === "1") return;
           inviteBtn.dataset.loading = "1";
 
@@ -577,19 +511,17 @@ async function getContext(sb) {
             inviteBtn.disabled = true;
             setMsg("ok", "");
 
-            const result = await window.UlydiaUsersRoles._api.createInvite(email, role);
+            await window.UlydiaUsersRoles._api.createInvite(email, role);
 
-            // result may be token/uuid or null depending on your RPC
             setMsg("ok", `Invite sent to ${email} (${role}).`);
             qs("#u_ur_invite_email", modal).value = "";
-
             await window.UlydiaUsersRoles.refresh();
+
           } catch (ex) {
             err(ex);
-
-            // Friendly duplicate message
             const msg = ex?.message || String(ex);
-            if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("already exists")) {
+            const low = msg.toLowerCase();
+            if (low.includes("duplicate") || low.includes("already exists") || low.includes("conflict")) {
               setMsg("err", `Invite already exists for ${email}.`);
             } else {
               setMsg("err", msg);
@@ -601,13 +533,11 @@ async function getContext(sb) {
         });
       }
 
-      // Initial load
       await window.UlydiaUsersRoles.refresh();
 
     } catch (ex) {
       err(ex);
       setMsg("err", ex?.message || String(ex));
-      // keep modal open so user can close manually
     }
 
     return { close };
@@ -634,17 +564,10 @@ async function getContext(sb) {
   }
 
   // ---------- Public API ----------
-  const api = {
-    open,
-    refresh,
-    _sb: null,
-    _ctx: null,
-    _modal: null,
-    _api: null,
-  };
-
+  const api = { open, refresh, _sb: null, _ctx: null, _modal: null, _api: null };
   window.UlydiaUsersRoles = api;
   window.UsersRoles = api;
 
-  log("loaded (v3.1). Call UlydiaUsersRoles.open()");
+  log("loaded (v4). Call UlydiaUsersRoles.open()");
 })();
+
