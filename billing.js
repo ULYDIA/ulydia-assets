@@ -2,14 +2,10 @@
   if (window.UlydiaBilling) return;
 
   // -------------------------
-  // utils
+  // utils (NO opts here!)
   // -------------------------
   function normBase(u){ return String(u||"").trim().replace(/\/$/, ""); }
-
-  function setText(el, txt){
-    if (!el) return;
-    el.textContent = String(txt || "");
-  }
+  function setText(el, txt){ if (el) el.textContent = String(txt || ""); }
 
   function isNetworkFetchError(e){
     const msg = String(e?.message || e || "");
@@ -27,7 +23,6 @@
     return new Promise((resolve, reject) => {
       if (window.Stripe) return resolve(true);
 
-      // avoid double insert
       const existing = document.querySelector('script[src="https://js.stripe.com/v3/"]');
       if (existing) {
         existing.addEventListener("load", () => resolve(true), { once:true });
@@ -56,14 +51,11 @@
     }
   }
 
-  // -------------------------
-  // base resolver (Worker-first strict)
-  // -------------------------
   async function resolveApiBase(opts){
     const worker = normBase(opts?.workerUrl);
     const api    = normBase(opts?.apiUrl || "");
 
-    const key = `${worker}|${api}|${opts?.preferWorker === false ? "apiFirst" : "workerFirst"}`;
+    const key = `${worker}|${api}|workerFirst`;
 
     if (opts?.resetCache) {
       try { delete window.__ULYDIA_BILLING_API_BASE__; } catch(_){}
@@ -74,14 +66,8 @@
       return window.__ULYDIA_BILLING_API_BASE__;
     }
 
-    const preferWorker = (opts?.preferWorker !== false); // default true
+    const candidates = [worker, api].filter(Boolean);
 
-    // candidates order
-    const candidates = preferWorker
-      ? [worker, api].filter(Boolean)
-      : [api, worker].filter(Boolean);
-
-    // strict test: must return 200 on /debug/cors
     const testBase = async (base) => {
       const url = base + "/debug/cors";
       try{
@@ -91,7 +77,7 @@
           credentials: "omit",
           cache: "no-store",
         }, 2500);
-        return r.status === 200;
+        return r.status === 200; // strict
       }catch(_e){
         return false;
       }
@@ -105,16 +91,12 @@
       }
     }
 
-    // fallback: if worker exists, keep worker; else api; else empty
     const chosen = worker || api || "";
     window.__ULYDIA_BILLING_API_BASE__ = chosen;
     window.__ULYDIA_BILLING_API_BASE_KEY__ = key;
     return chosen;
   }
 
-  // -------------------------
-  // API helpers
-  // -------------------------
   async function postJsonOnce(baseUrl, proxySecret, path, payload){
     const base = normBase(baseUrl);
     const url  = base + path;
@@ -136,27 +118,23 @@
     try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
 
     if (!res.ok) {
-      // keep server message
       throw new Error(`API ${path} failed (${res.status}): ${data.error || data.message || txt || "unknown"}`);
     }
     return data;
   }
 
-  // Worker-first: fallback ONLY on network errors (never on 401/403/500 etc.)
-  async function postJsonWorkerFirst(basePrimary, baseFallback, proxySecret, path, payload){
+  // fallback ONLY on network errors
+  async function postJsonWorkerFirst(primary, fallback, proxySecret, path, payload){
     try{
-      return await postJsonOnce(basePrimary, proxySecret, path, payload);
+      return await postJsonOnce(primary, proxySecret, path, payload);
     }catch(e){
-      if (baseFallback && isNetworkFetchError(e)) {
-        return await postJsonOnce(baseFallback, proxySecret, path, payload);
+      if (fallback && isNetworkFetchError(e)) {
+        return await postJsonOnce(fallback, proxySecret, path, payload);
       }
       throw e;
     }
   }
 
-  // -------------------------
-  // UI
-  // -------------------------
   function buildContent(){
     const content = document.createElement("div");
     content.innerHTML = `
@@ -173,16 +151,24 @@
     return content;
   }
 
-  // -------------------------
-  // main
-  // -------------------------
   async function open(opts){
+    // -------------------------
+    // ✅ opts only used HERE
+    // -------------------------
     const token = String(opts?.token || "").trim();
     const proxySecret = String(opts?.proxySecret || "").trim();
     const pk = String(opts?.stripePublishableKey || "").trim();
 
     const workerUrl = normBase(opts?.workerUrl);
     const apiUrl    = normBase(opts?.apiUrl || "");
+
+    // hard guard (safe)
+    if (location.hostname.endsWith("ulydia.com")) {
+      if (!proxySecret || proxySecret.includes("TEST_SECRET")) {
+        alert("Billing blocked: bad proxy secret in production.");
+        return;
+      }
+    }
 
     if (!token || !proxySecret || !pk) {
       alert("Billing module: missing config (token / proxySecret / stripePublishableKey).");
@@ -207,17 +193,7 @@
 
     btnCancel.onclick = () => modal?.close?.();
 
-    // STRATEGY:
-    // - choose base (prefer worker)
-    // - use apiUrl only as network fallback (optional)
-    const resolvedBase = await resolveApiBase({
-      ...opts,
-      preferWorker: true,         // ✅ strict worker-first
-      resetCache: !!opts.resetCache,
-    });
-
-    // primary = resolvedBase, fallback = "other"
-    const primary = resolvedBase || workerUrl || apiUrl;
+    const primary = await resolveApiBase({ workerUrl, apiUrl, resetCache: true }); // ✅ force re-eval
     const fallback = (primary === workerUrl ? apiUrl : workerUrl) || "";
 
     setText(hintEl, `Using: ${primary.replace(/^https?:\/\//, "")}`);
@@ -226,17 +202,16 @@
       await loadStripeJsOnce();
       const stripe = window.Stripe(pk);
 
-      // 1) SetupIntent
       btnSave.disabled = true;
       setText(errEl, "");
-      setText(hintEl, `Creating secure session…`);
+      setText(hintEl, "Creating secure session…");
 
       const si = await postJsonWorkerFirst(primary, fallback, proxySecret, "/billing/setup-intent", { token });
       const clientSecret = String(si.client_secret || "");
       if (!clientSecret) throw new Error("Missing client_secret");
 
-      // 2) Stripe Elements
-      setText(hintEl, `Enter card details…`);
+      setText(hintEl, "Enter card details…");
+
       const elements = stripe.elements();
       const card = elements.create("card", { hidePostalCode: true });
       card.mount(cardMount);
@@ -247,7 +222,7 @@
         try{
           btnSave.disabled = true;
           setText(errEl, "");
-          setText(hintEl, `Confirming with Stripe…`);
+          setText(hintEl, "Confirming with Stripe…");
 
           const result = await stripe.confirmCardSetup(clientSecret, { payment_method: { card } });
           if (result.error) {
@@ -260,9 +235,8 @@
           const pmId = result.setupIntent?.payment_method;
           if (!pmId) throw new Error("Missing payment_method id");
 
-          setText(hintEl, `Saving as default…`);
+          setText(hintEl, "Saving as default…");
 
-          // 3) Set default PM
           await postJsonWorkerFirst(primary, fallback, proxySecret, "/billing/set-default", {
             token,
             payment_method: pmId
@@ -278,7 +252,6 @@
       };
 
     }catch(e){
-      // Keep modal open and show error
       setText(errEl, e?.message || "Payment update failed");
       setText(hintEl, "");
       btnSave.disabled = false;
