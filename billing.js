@@ -14,21 +14,39 @@
     });
   }
 
-  async function postJson(workerUrl, proxySecret, path, payload){
-    const res = await fetch(apiBase(workerUrl) + path, {
+async function postJson(workerUrl, proxySecret, path, payload){
+  const base = String(workerUrl || "").trim().replace(/\/$/, "");
+  const url  = base + path;
+
+  let res, txt = "";
+  try{
+    res = await fetch(url, {
       method: "POST",
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
       headers: {
         "content-type": "application/json",
         "x-proxy-secret": proxySecret,
       },
-      body: JSON.stringify(payload || {})
+      body: JSON.stringify(payload || {}),
     });
-    const txt = await res.text().catch(()=> "");
-    let data = {};
-    try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
-    if (!res.ok) throw new Error(data.error || data.message || `API error (${res.status})`);
-    return data;
+    txt = await res.text().catch(()=> "");
+  }catch(e){
+    // Ici : CSP / blocage navigateur / réseau / extension
+    throw new Error(`Fetch blocked (network/CSP) on ${url}: ${e?.message || e}`);
   }
+
+  let data = {};
+  try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+
+  if (!res.ok) {
+    throw new Error(`API ${path} failed (${res.status}): ${data.error || data.message || txt || "unknown"}`);
+  }
+
+  return data;
+}
+
 
   async function open(opts){
     const token = String(opts?.token || "").trim();
