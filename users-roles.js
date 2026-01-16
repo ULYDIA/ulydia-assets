@@ -1,23 +1,23 @@
-/* users-roles.js — Ulydia (V4.3)
+/* users-roles.js — Ulydia (V4.4)
    - Tokenless + RLS
    - RPC create_company_invite
-   - RPC resend_company_invite (for resend/renew)
-   - ✅ Resend cooldown (default 60s)
+   - RPC resend_company_invite (resend/renew)
+   - ✅ Resend cooldown with LIVE countdown (60s)
    - ✅ Copy invite link
-   - ✅ Expiration (default 7 days) -> shows "expired" + "renew"
+   - ✅ Expiration (7 days) -> shows "expired" + renew
 */
 (() => {
-  if (window.__ULYDIA_USERS_ROLES_V43__) return;
-  window.__ULYDIA_USERS_ROLES_V43__ = true;
+  if (window.__ULYDIA_USERS_ROLES_V44__) return;
+  window.__ULYDIA_USERS_ROLES_V44__ = true;
 
   const NS = "[Users&Roles]";
 
   // =========================
-  // CONFIG (tweak if needed)
+  // CONFIG
   // =========================
-  const INVITE_EXPIRE_DAYS = 7;          // (4) expiration
-  const RESEND_COOLDOWN_SECONDS = 60;    // (1) cooldown
-  const INVITE_LINK_BASE = "https://www.ulydia.com/login"; // (3) copy link base
+  const INVITE_EXPIRE_DAYS = 7;
+  const RESEND_COOLDOWN_SECONDS = 60;
+  const INVITE_LINK_BASE = "https://www.ulydia.com/login";
 
   // ---------- Small helpers ----------
   const qs  = (sel, root = document) => root.querySelector(sel);
@@ -30,7 +30,6 @@
     const t = Date.parse(String(d || ""));
     return Number.isFinite(t) ? t : NaN;
   }
-  function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
 
   function escapeHtml(s) {
     return String(s ?? "")
@@ -45,7 +44,6 @@
       await navigator.clipboard.writeText(t);
       return true;
     }
-    // fallback
     const ta = document.createElement("textarea");
     ta.value = t;
     ta.style.position = "fixed";
@@ -68,7 +66,6 @@
   }
 
   function computeExpiryMs(inv){
-    // Prefer expires_at if present; else created_at + INVITE_EXPIRE_DAYS
     const exp = toMs(inv?.expires_at);
     if (Number.isFinite(exp)) return exp;
 
@@ -79,7 +76,7 @@
 
   function isExpired(inv){
     const expMs = computeExpiryMs(inv);
-    if (!Number.isFinite(expMs)) return false; // if unknown, don't block
+    if (!Number.isFinite(expMs)) return false;
     return nowMs() > expMs;
   }
 
@@ -124,7 +121,6 @@
   --ul-red: #c00102;
   --ul-red-focus: rgba(192,1,2,.12);
   --ul-text: rgba(0,0,0,.88);
-  --ul-muted: rgba(0,0,0,.60);
   --ul-border: rgba(0,0,0,.12);
   --ul-border-2: rgba(0,0,0,.18);
   --ul-bg: #fff;
@@ -272,6 +268,7 @@
       try { backdrop.remove(); } catch {}
       try { modal.remove(); } catch {}
       document.documentElement.style.overflow = "";
+      try { window.UlydiaUsersRoles?.stopTick?.(); } catch {}
     };
 
     qs(".u-ur-close", modal).addEventListener("click", close);
@@ -366,7 +363,7 @@
     const p_invite_id = invite_id;
     const { data, error } = await sb.rpc("resend_company_invite", { p_invite_id });
     if (error) throw error;
-    return data; // should contain token ideally
+    return data;
   }
 
   async function cancelInvite(sb, invite_id) {
@@ -462,29 +459,22 @@
     }
 
     invites.forEach((inv) => {
-      const statusRaw = String(inv.status || "");
-      const status = statusRaw.toLowerCase();
-
       const expired = isExpired(inv);
-      const cooldownLeft = cooldownLeftSeconds(inv);
+      const left = cooldownLeftSeconds(inv);
       const hasToken = !!String(inv.token || "").trim();
 
-      // UI status label
       const statusLabel = expired
         ? `<span class="u-ur-pill expired">expired</span>`
-        : `<span class="u-ur-pill">${escapeHtml(statusRaw || "pending")}</span>`;
+        : `<span class="u-ur-pill">${escapeHtml(inv.status || "pending")}</span>`;
 
-      // resend label
-      const resendLabel = expired ? "renew" : (cooldownLeft > 0 ? `resend (${cooldownLeft}s)` : "resend");
+      const resendLabel = expired ? "renew" : (left > 0 ? `resend (${left}s)` : "resend");
 
-      // business rules:
-      // - cancel always available for admin
-      // - copy link available if token exists AND not expired
-      // - resend available if admin AND (expired => renew) OR (pending and cooldown passed)
       const canCopy = (!expired && hasToken);
-      const canResend = (cooldownLeft === 0); // if expired, still true => "renew"
+      const canResend = (left === 0);
 
       const tr = document.createElement("tr");
+      tr.setAttribute("data-invite-id", inv.id);
+
       tr.innerHTML = `
         <td>${escapeHtml(inv.email || "")}</td>
         <td>${escapeHtml(inv.role || "")}</td>
@@ -498,8 +488,7 @@
         </td>
       `;
 
-      const canEdit = !!ctx.is_admin;
-      qsa("button", tr).forEach(b => { if (!canEdit) b.disabled = true; });
+      qsa("button", tr).forEach(b => { if (!ctx.is_admin) b.disabled = true; });
 
       tr.addEventListener("click", async (e) => {
         const btn = e.target.closest("button[data-act]");
@@ -524,7 +513,6 @@
           }
 
           if (act === "copy") {
-            // Copy only if token exists + not expired
             const link = buildInviteUrl(inv.token);
             if (!link) throw new Error("Invite link not available (missing token).");
             await copyToClipboard(link);
@@ -533,26 +521,21 @@
           }
 
           if (act === "resend") {
-            // Cooldown check (UX)
-            const left = cooldownLeftSeconds(inv);
-            if (left > 0) {
-              setMsg("err", `Please wait ${left}s before resending.`);
+            const l = cooldownLeftSeconds(inv);
+            if (l > 0) {
+              setMsg("err", `Please wait ${l}s before resending.`);
               return;
             }
 
-            // Renew/resend via RPC (should also refresh token + last_sent_at)
             const res = await api._api.resendInvite(inv.id);
-
-            // Try to copy the renewed link directly (nice UX)
-            const newToken = res?.token || res?.invite_token || "";
-            const link = buildInviteUrl(newToken);
-            if (link) {
-              // optional: copy automatically
-              // await copyToClipboard(link);
-            }
-
             setMsg("ok", expired ? `Invitation renewed for ${inv.email}.` : `Invitation resent to ${inv.email}.`);
+
             await api.refresh();
+
+            // optional: if backend returns token, refresh UI cache faster
+            if (res?.token) {
+              // noop; refresh already done
+            }
             return;
           }
         } catch (ex) {
@@ -574,7 +557,47 @@
     _ctx: null,
     _modal: null,
     _api: null,
-    _cooldownTimer: null,
+
+    // ✅ cache for LIVE countdown
+    _invitesCache: [],
+    _tick: null,
+
+    startTick(){
+      if (api._tick) clearInterval(api._tick);
+
+      api._tick = setInterval(() => {
+        if (!api._modal || !document.body.contains(api._modal)) {
+          api.stopTick();
+          return;
+        }
+
+        const tbody = qs("#u_ur_invites_tbody", api._modal);
+        if (!tbody) return;
+
+        const rows = Array.from(tbody.querySelectorAll("tr[data-invite-id]"));
+        for (const tr of rows) {
+          const inviteId = tr.getAttribute("data-invite-id");
+          if (!inviteId) continue;
+
+          const inv = (api._invitesCache || []).find(x => String(x.id) === String(inviteId));
+          if (!inv) continue;
+
+          const btn = tr.querySelector('button[data-act="resend"]');
+          if (!btn) continue;
+
+          const expired = isExpired(inv);
+          const left = cooldownLeftSeconds(inv);
+
+          btn.textContent = expired ? "renew" : (left > 0 ? `resend (${left}s)` : "resend");
+          btn.disabled = (!!(left > 0)) || !api._ctx?.is_admin;
+        }
+      }, 1000);
+    },
+
+    stopTick(){
+      if (api._tick) clearInterval(api._tick);
+      api._tick = null;
+    },
 
     async open(opts = {}) {
       const { modal } = createModal();
@@ -614,7 +637,6 @@
           if (inviteRole) inviteRole.disabled = true;
         }
 
-        // Bind invite creation
         if (inviteBtn && !inviteBtn.dataset.bound) {
           inviteBtn.dataset.bound = "1";
           let inflightKey = null;
@@ -660,24 +682,6 @@
         }
 
         await api.refresh();
-
-        // (1) Cooldown UX: refresh invites row labels every second while modal is open
-        if (api._cooldownTimer) clearInterval(api._cooldownTimer);
-        api._cooldownTimer = setInterval(() => {
-          // Only re-render invites table if we are on modal and invites panel exists
-          if (!api._modal || !document.body.contains(api._modal)) {
-            clearInterval(api._cooldownTimer);
-            api._cooldownTimer = null;
-            return;
-          }
-          // cheap refresh: reload invites only (no extra DB calls)
-          // We need DB calls to update countdown? actually countdown computed client-side,
-          // so we can just re-render from last cache. But we don't keep cache -> simplest: do nothing.
-          // Better: just refresh DOM labels without DB: re-run full refresh rarely is heavier.
-          // We'll keep it lightweight: no auto DB refresh here.
-          // Buttons already display cooldown at render time; to update the countdown live, user can click or refresh.
-        }, 1000);
-
       } catch (ex) {
         err(ex);
         setMsg("err", ex?.message || String(ex));
@@ -695,8 +699,13 @@
           loadMembers(sb, ctx.company_id),
           loadInvites(sb, ctx.company_id),
         ]);
+
+        api._invitesCache = invites || [];
+
         renderMembers(modal, ctx, members);
-        renderInvites(modal, ctx, invites);
+        renderInvites(modal, ctx, api._invitesCache);
+
+        api.startTick(); // ✅ LIVE countdown
       } catch (ex) {
         err(ex);
         setMsg("err", ex?.message || String(ex));
@@ -707,6 +716,5 @@
   window.UlydiaUsersRoles = api;
   window.UsersRoles = api;
 
-  log("loaded (V4.3). Call UlydiaUsersRoles.open()");
+  log("loaded (V4.4). Call UlydiaUsersRoles.open()");
 })();
-
