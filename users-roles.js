@@ -1,10 +1,11 @@
-/* users-roles.js — Ulydia (V4.1, tokenless, single Supabase client)
+/* users-roles.js — Ulydia (V4.2, tokenless, single Supabase client)
    - Works with RLS (no dashboard token required)
    - Accepts open({ supabase, token }) for compatibility with my-account
    - Uses RPC create_company_invite
+   - ✅ Adds RPC resend_company_invite + "Resend" button on pending invites
    - Avoids duplicate / rafale (hard guards)
    - Never freezes page (modal always closable)
-   - ✅ Updated UI theme to match Ulydia Login/Sponsorship (Montserrat + #c00102)
+   - UI theme matches Ulydia Login/Sponsorship (Montserrat + #c00102)
 */
 (() => {
   if (window.__ULYDIA_USERS_ROLES_V4__) return;
@@ -70,7 +71,7 @@
   z-index:999998;
 }
 
-/* Modal card (match .u-card style) */
+/* Modal card */
 .u-ur-modal{
   position:fixed;
   left:50%; top:50%;
@@ -88,7 +89,7 @@
   color:var(--ul-text);
 }
 
-/* Header (match .u-top vibe) */
+/* Header */
 .u-ur-head{
   display:flex;
   align-items:flex-start;
@@ -101,20 +102,20 @@
 
 .u-ur-title{
   margin:0;
-  font-size:22px;        /* ✅ like .u-title in page */
-  font-weight:900;       /* ✅ */
+  font-size:22px;
+  font-weight:900;
   letter-spacing:-0.02em;
   color:var(--ul-text);
 }
 
 .u-ur-sub{
   margin:6px 0 0;
-  font-size:13px;        /* ✅ like .u-sub */
+  font-size:13px;
   font-weight:700;
   color:var(--ul-red);
 }
 
-/* Close button (match .u-btnGhost) */
+/* Close button */
 .u-ur-close{
   border:1px solid var(--ul-border-2);
   background:#fff;
@@ -127,7 +128,7 @@
 }
 .u-ur-close:hover{ border-color:rgba(0,0,0,.35); }
 
-/* Inner panel card (match .u-box) */
+/* Inner card */
 .u-ur-card{
   border:1px solid var(--ul-border);
   border-radius:20px;
@@ -144,7 +145,7 @@
 }
 
 .u-ur-h2{
-  font-size:18px;       /* ✅ like section title */
+  font-size:18px;
   font-weight:900;
   margin:0;
   color:var(--ul-text);
@@ -157,7 +158,7 @@
   font-weight:700;
 }
 
-/* Tabs (match pill buttons from your style) */
+/* Tabs */
 .u-ur-tabs{
   display:flex;
   gap:10px;
@@ -171,7 +172,7 @@
   border-radius:999px;
   padding:10px 16px;
   font-weight:900;
-  font-size:14px;      /* ✅ match buttons */
+  font-size:14px;
   cursor:pointer;
   color:var(--ul-text);
   font-family:var(--ul-font);
@@ -183,7 +184,7 @@
   box-shadow:0 0 0 4px var(--ul-red-focus);
 }
 
-/* Messages (match page alert density) */
+/* Messages */
 .u-ur-msg{
   margin-top:14px;
   border-radius:16px;
@@ -215,20 +216,20 @@
   border-bottom:1px solid rgba(0,0,0,.08);
   padding:12px 8px;
   text-align:left;
-  font-size:14px;       /* ✅ like values */
+  font-size:14px;
   font-weight:600;
   vertical-align:middle;
   color:var(--ul-text);
 }
 .u-ur-table th{
-  font-size:12px;       /* ✅ like labels */
+  font-size:12px;
   font-weight:700;
   text-transform:uppercase;
   letter-spacing:.02em;
   color:rgba(0,0,0,.55);
 }
 
-/* Buttons (match .u-btn / .u-btnPrimary / .u-btnGhost) */
+/* Buttons */
 .u-ur-actions{
   display:flex;
   gap:10px;
@@ -248,7 +249,7 @@
   color:var(--ul-text);
 }
 .u-ur-btn:hover{ border-color:rgba(0,0,0,.35); }
-.u-ur-btn:disabled{ opacity:.6; cursor:not-allowed; }
+.u-ur-btn:disabled{ opacity:.55; cursor:not-allowed; }
 
 .u-ur-btn.primary{
   background:var(--ul-red);
@@ -263,7 +264,7 @@
 }
 .u-ur-btn.danger:hover{ border-color:rgba(215,25,25,.45); }
 
-/* Inputs (match .u-input) */
+/* Inputs */
 .u-ur-input{
   border:1px solid var(--ul-border-2);
   border-radius:var(--ul-radius-md);
@@ -294,7 +295,6 @@
   .u-ur-title{ font-size:20px; }
 }
 `;
-
     document.head.appendChild(s);
   }
 
@@ -350,7 +350,7 @@
           </div>
 
           <table class="u-ur-table">
-            <thead><tr><th>Email</th><th>Role</th><th>Status</th><th style="width:220px;">Actions</th></tr></thead>
+            <thead><tr><th>Email</th><th>Role</th><th>Status</th><th style="width:260px;">Actions</th></tr></thead>
             <tbody id="u_ur_invites_tbody"></tbody>
           </table>
         </div>
@@ -430,7 +430,7 @@
   async function loadInvites(sb, company_id) {
     const { data, error } = await sb
       .from("company_invites")
-      .select("id, email, role, status, created_at")
+      .select("id, email, role, status, created_at, last_sent_at, sent_count")
       .eq("company_id", company_id)
       .order("created_at", { ascending: false });
     if (error) throw error;
@@ -455,6 +455,14 @@
     const p_role = String(role || "member").trim();
     const p_company_id = company_id;
     const { data, error } = await sb.rpc("create_company_invite", { p_email, p_role, p_company_id });
+    if (error) throw error;
+    return data;
+  }
+
+  // ✅ NEW: Uses RPC resend_company_invite
+  async function resendInviteRPC(sb, invite_id) {
+    const p_invite_id = invite_id;
+    const { data, error } = await sb.rpc("resend_company_invite", { p_invite_id });
     if (error) throw error;
     return data;
   }
@@ -553,6 +561,9 @@
     }
 
     invites.forEach((inv) => {
+      const status = String(inv.status || "").toLowerCase();
+      const canResend = (status === "pending");
+
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${escapeHtml(inv.email || "")}</td>
@@ -560,6 +571,7 @@
         <td>${escapeHtml(inv.status || "")}</td>
         <td>
           <div class="u-ur-actions">
+            <button class="u-ur-btn" data-act="resend" ${canResend ? "" : "disabled"}>resend</button>
             <button class="u-ur-btn danger" data-act="cancel">cancel</button>
           </div>
         </td>
@@ -581,8 +593,15 @@
           setMsg("ok", "");
           btn.disabled = true;
 
-          await api._api.cancelInvite(inv.id);
-          setMsg("ok", `Invite cancelled: ${inv.email}`);
+          const act = btn.dataset.act;
+
+          if (act === "cancel") {
+            await api._api.cancelInvite(inv.id);
+            setMsg("ok", `Invite cancelled: ${inv.email}`);
+          } else if (act === "resend") {
+            await api._api.resendInvite(inv.id);
+            setMsg("ok", `Invitation resent to ${inv.email}.`);
+          }
 
           await api.refresh();
         } catch (ex) {
@@ -625,6 +644,8 @@
           removeMember: (user_id) => removeMember(sb, api._ctx.company_id, user_id),
           cancelInvite: (invite_id) => cancelInvite(sb, invite_id),
           createInvite: (email, role) => createInviteRPC(sb, api._ctx.company_id, email, role),
+          // ✅ NEW
+          resendInvite: (invite_id) => resendInviteRPC(sb, invite_id),
         };
 
         // If not logged in / no company
@@ -633,9 +654,18 @@
 
         setMsg("ok", ctx.is_admin ? "Admin access confirmed." : "You are a member (read-only). Ask an admin to change roles.");
 
+        // ✅ If not admin, disable invite inputs/buttons so it doesn't feel broken
+        const inviteBtn  = qs("#u_ur_invite_btn", modal);
+        const inviteMail = qs("#u_ur_invite_email", modal);
+        const inviteRole = qs("#u_ur_invite_role", modal);
+        if (!ctx.is_admin) {
+          if (inviteBtn) inviteBtn.disabled = true;
+          if (inviteMail) inviteMail.disabled = true;
+          if (inviteRole) inviteRole.disabled = true;
+        }
+
         // Invite button (hard guard rafale)
-        const inviteBtn = qs("#u_ur_invite_btn", modal);
-        if (!inviteBtn.dataset.bound) {
+        if (inviteBtn && !inviteBtn.dataset.bound) {
           inviteBtn.dataset.bound = "1";
           let inflightKey = null;
 
@@ -709,5 +739,6 @@
   window.UlydiaUsersRoles = api;
   window.UsersRoles = api;
 
-  log("loaded (V4.1). Call UlydiaUsersRoles.open()");
+  log("loaded (V4.2). Call UlydiaUsersRoles.open()");
 })();
+
