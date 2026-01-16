@@ -1,7 +1,8 @@
 (() => {
   if (window.UlydiaBilling) return;
 
-  function apiBase(workerUrl){ return String(workerUrl||"").replace(/\/$/, ""); }
+  // ---------------- helpers ----------------
+  function normBase(u){ return String(u||"").trim().replace(/\/$/, ""); }
 
   function loadStripeJsOnce(){
     return new Promise((resolve, reject) => {
@@ -14,52 +15,102 @@
     });
   }
 
-async function postJson(workerUrl, proxySecret, path, payload){
-  const base = String(workerUrl || "").trim().replace(/\/$/, "");
-  const url  = base + path;
-
-  let res, txt = "";
-  try{
-    res = await fetch(url, {
-      method: "POST",
-      mode: "cors",
-      credentials: "omit",
-      cache: "no-store",
-      headers: {
-        "content-type": "application/json",
-        "x-proxy-secret": proxySecret,
-      },
-      body: JSON.stringify(payload || {}),
-    });
-    txt = await res.text().catch(()=> "");
-  }catch(e){
-    // Ici : CSP / blocage navigateur / réseau / extension
-    throw new Error(`Fetch blocked (network/CSP) on ${url}: ${e?.message || e}`);
+  async function fetchWithTimeout(url, opts = {}, ms = 1800){
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), ms);
+    try{
+      const res = await fetch(url, { ...opts, signal: ctrl.signal });
+      clearTimeout(t);
+      return res;
+    }catch(e){
+      clearTimeout(t);
+      throw e;
+    }
   }
 
-  let data = {};
-  try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+  async function resolveApiBase(opts){
+    // cache global (évite de retester à chaque clic)
+    if (window.__ULYDIA_BILLING_API_BASE__) return window.__ULYDIA_BILLING_API_BASE__;
 
-  if (!res.ok) {
-    throw new Error(`API ${path} failed (${res.status}): ${data.error || data.message || txt || "unknown"}`);
+    const candidateApi = normBase(opts?.apiUrl || "https://api.ulydia.com");
+    const candidateWorker = normBase(opts?.workerUrl);
+
+    // ordre: api.ulydia.com d'abord, sinon workers.dev
+    const candidates = [candidateApi, candidateWorker].filter(Boolean);
+
+    // test: route qui doit répondre (200 ou 404)
+    const testBase = async (base) => {
+      const url = base + "/debug/cors";
+      try{
+        const r = await fetchWithTimeout(url, {
+          method: "GET",
+          mode: "cors",
+          credentials: "omit",
+          cache: "no-store",
+        }, 1500);
+        return (r.status === 200 || r.status === 404);
+      }catch(_e){
+        return false;
+      }
+    };
+
+    for (const b of candidates){
+      if (await testBase(b)){
+        window.__ULYDIA_BILLING_API_BASE__ = b;
+        return b;
+      }
+    }
+
+    // dernier recours
+    window.__ULYDIA_BILLING_API_BASE__ = candidateWorker || candidateApi;
+    return window.__ULYDIA_BILLING_API_BASE__;
   }
 
-  return data;
-}
+  async function postJson(baseUrl, proxySecret, path, payload){
+    const base = normBase(baseUrl);
+    const url  = base + path;
 
+    let res, txt = "";
+    try{
+      res = await fetch(url, {
+        method: "POST",
+        mode: "cors",
+        credentials: "omit",
+        cache: "no-store",
+        headers: {
+          "content-type": "application/json",
+          "x-proxy-secret": proxySecret,
+        },
+        body: JSON.stringify(payload || {}),
+      });
+      txt = await res.text().catch(()=> "");
+    }catch(e){
+      throw new Error(`Fetch blocked (network/CSP) on ${url}: ${e?.message || e}`);
+    }
 
+    let data = {};
+    try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
+
+    if (!res.ok) {
+      throw new Error(`API ${path} failed (${res.status}): ${data.error || data.message || txt || "unknown"}`);
+    }
+
+    return data;
+  }
+
+  // ---------------- main ----------------
   async function open(opts){
     const token = String(opts?.token || "").trim();
-    const workerUrl = String(opts?.workerUrl || "").trim();
     const proxySecret = String(opts?.proxySecret || "").trim();
     const pk = String(opts?.stripePublishableKey || "").trim();
-    if (!token || !workerUrl || !proxySecret || !pk) {
-      alert("Billing module: missing config.");
+
+    if (!token || !proxySecret || !pk) {
+      alert("Billing module: missing config (token / proxySecret / stripePublishableKey).");
       return;
     }
 
     // modal: soit tu utilises celui du host, soit fallback simple
-    const openModal = opts.openModal || null;
+    const openModal = opts?.openModal || null;
 
     const content = document.createElement("div");
     content.innerHTML = `
@@ -76,17 +127,25 @@ async function postJson(workerUrl, proxySecret, path, payload){
     if (openModal) {
       modal = openModal({ title: "Change payment method", content });
     } else {
-      // fallback minimal si pas de modal host
-      alert("No modal provided by host. (You can pass openModal.)");
+      alert("No modal provided by host. (Pass openModal from my-account/users-role modal system.)");
       return;
     }
 
+    const btnSave = content.querySelector("#ub_save");
+    const btnCancel = content.querySelector("#ub_cancel");
+    const err = content.querySelector("#ub_err");
+    btnCancel.onclick = () => modal?.close?.();
+
     try{
+      // 0) resolve base (api.ulydia.com -> fallback workers.dev)
+      const baseUrl = await resolveApiBase(opts);
+      if (!baseUrl) throw new Error("Missing API base URL");
+
       await loadStripeJsOnce();
       const stripe = window.Stripe(pk);
 
       // 1) SetupIntent
-      const si = await postJson(workerUrl, proxySecret, "/billing/setup-intent", { token });
+      const si = await postJson(baseUrl, proxySecret, "/billing/setup-intent", { token });
       const clientSecret = String(si.client_secret || "");
       if (!clientSecret) throw new Error("Missing client_secret");
 
@@ -94,12 +153,6 @@ async function postJson(workerUrl, proxySecret, path, payload){
       const elements = stripe.elements();
       const card = elements.create("card", { hidePostalCode: true });
       card.mount(content.querySelector("#ub_card"));
-
-      const btnSave = content.querySelector("#ub_save");
-      const btnCancel = content.querySelector("#ub_cancel");
-      const err = content.querySelector("#ub_err");
-
-      btnCancel.onclick = () => modal?.close?.();
 
       btnSave.onclick = async () => {
         try{
@@ -119,7 +172,7 @@ async function postJson(workerUrl, proxySecret, path, payload){
           const pmId = result.setupIntent?.payment_method;
           if (!pmId) throw new Error("Missing payment_method id");
 
-          await postJson(workerUrl, proxySecret, "/billing/set-default", {
+          await postJson(baseUrl, proxySecret, "/billing/set-default", {
             token,
             payment_method: pmId
           });
