@@ -27,40 +27,54 @@
     }
   }
 
-  async function resolveApiBase(opts){
-    // cache global (évite de retester à chaque clic)
-    if (window.__ULYDIA_BILLING_API_BASE__) return window.__ULYDIA_BILLING_API_BASE__;
+async function resolveApiBase(opts){
+  // ✅ cache clé par config (évite le “cache bloqué” quand tu changes apiUrl/workerUrl)
+  const key = `${normBase(opts?.workerUrl)}|${normBase(opts?.apiUrl || "https://api.ulydia.com")}`;
 
-    const candidateApi = normBase(opts?.apiUrl || "https://api.ulydia.com");
-    const candidateWorker = normBase(opts?.workerUrl);
-
-    const candidates = [candidateApi, candidateWorker].filter(Boolean);
-
-    const testBase = async (base) => {
-      const url = base + "/debug/cors";
-      try{
-        const r = await fetchWithTimeout(url, {
-          method: "GET",
-          mode: "cors",
-          credentials: "omit",
-          cache: "no-store",
-        }, 1500);
-        return (r.status === 200 || r.status === 404);
-      }catch(_e){
-        return false;
-      }
-    };
-
-    for (const b of candidates){
-      if (await testBase(b)){
-        window.__ULYDIA_BILLING_API_BASE__ = b;
-        return b;
-      }
-    }
-
-    window.__ULYDIA_BILLING_API_BASE__ = candidateWorker || candidateApi;
+  if (
+    window.__ULYDIA_BILLING_API_BASE__ &&
+    window.__ULYDIA_BILLING_API_BASE_KEY__ === key
+  ) {
     return window.__ULYDIA_BILLING_API_BASE__;
   }
+
+  const candidateApi = normBase(opts?.apiUrl || "https://api.ulydia.com");
+  const candidateWorker = normBase(opts?.workerUrl);
+
+  // ✅ worker d’abord
+  const candidates = [candidateWorker, candidateApi].filter(Boolean);
+
+  const testBase = async (base) => {
+    const url = base + "/debug/cors";
+    try{
+      const r = await fetchWithTimeout(url, {
+        method: "GET",
+        mode: "cors",
+        credentials: "omit",
+        cache: "no-store",
+      }, 1500);
+
+      // ✅ on veut 200 uniquement (pas 404)
+      return (r.status === 200);
+    }catch(_e){
+      return false;
+    }
+  };
+
+  for (const b of candidates){
+    if (await testBase(b)){
+      window.__ULYDIA_BILLING_API_BASE__ = b;
+      window.__ULYDIA_BILLING_API_BASE_KEY__ = key;
+      return b;
+    }
+  }
+
+  // fallback final (si aucun test OK)
+  window.__ULYDIA_BILLING_API_BASE__ = candidateWorker || candidateApi;
+  window.__ULYDIA_BILLING_API_BASE_KEY__ = key;
+  return window.__ULYDIA_BILLING_API_BASE__;
+}
+
 
   function isNetworkFetchError(e){
     const msg = String(e?.message || e || "");
