@@ -1,11 +1,5 @@
 (() => {
   if (window.UlydiaBilling) return;
-  // 🔒 hard safety: never allow TEST_SECRET / api.ulydia.com in prod
-  if (location.hostname.endsWith("ulydia.com")) {
-    if (String(opts?.proxySecret || "").includes("TEST")) {
-      throw new Error("Billing blocked: TEST_SECRET detected in production.");
-    }
-  }
 
   // -------------------------
   // utils
