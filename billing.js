@@ -1,7 +1,6 @@
 (() => {
   if (window.UlydiaBilling) return;
 
-  // ---------------- helpers ----------------
   function normBase(u){ return String(u||"").trim().replace(/\/$/, ""); }
 
   function loadStripeJsOnce(){
@@ -15,7 +14,7 @@
     });
   }
 
-  async function fetchWithTimeout(url, opts = {}, ms = 1800){
+  async function fetchWithTimeout(url, opts = {}, ms = 2200){
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), ms);
     try{
@@ -35,10 +34,8 @@
     const candidateApi = normBase(opts?.apiUrl || "https://api.ulydia.com");
     const candidateWorker = normBase(opts?.workerUrl);
 
-    // ordre: api.ulydia.com d'abord, sinon workers.dev
     const candidates = [candidateApi, candidateWorker].filter(Boolean);
 
-    // test: route qui doit répondre (200 ou 404)
     const testBase = async (base) => {
       const url = base + "/debug/cors";
       try{
@@ -61,32 +58,38 @@
       }
     }
 
-    // dernier recours
     window.__ULYDIA_BILLING_API_BASE__ = candidateWorker || candidateApi;
     return window.__ULYDIA_BILLING_API_BASE__;
   }
 
-  async function postJson(baseUrl, proxySecret, path, payload){
+  function isNetworkFetchError(e){
+    const msg = String(e?.message || e || "");
+    return (
+      msg.includes("Failed to fetch") ||
+      msg.includes("NetworkError") ||
+      msg.includes("ERR_NAME_NOT_RESOLVED") ||
+      msg.includes("aborted") ||
+      msg.includes("AbortError")
+    );
+  }
+
+  async function postJsonOnce(baseUrl, proxySecret, path, payload){
     const base = normBase(baseUrl);
     const url  = base + path;
 
     let res, txt = "";
-    try{
-      res = await fetch(url, {
-        method: "POST",
-        mode: "cors",
-        credentials: "omit",
-        cache: "no-store",
-        headers: {
-          "content-type": "application/json",
-          "x-proxy-secret": proxySecret,
-        },
-        body: JSON.stringify(payload || {}),
-      });
-      txt = await res.text().catch(()=> "");
-    }catch(e){
-      throw new Error(`Fetch blocked (network/CSP) on ${url}: ${e?.message || e}`);
-    }
+    res = await fetch(url, {
+      method: "POST",
+      mode: "cors",
+      credentials: "omit",
+      cache: "no-store",
+      headers: {
+        "content-type": "application/json",
+        "x-proxy-secret": proxySecret,
+      },
+      body: JSON.stringify(payload || {}),
+    });
+    txt = await res.text().catch(()=> "");
 
     let data = {};
     try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
@@ -98,18 +101,36 @@
     return data;
   }
 
-  // ---------------- main ----------------
+  async function postJsonSmart(primaryBase, fallbackBase, proxySecret, path, payload){
+    try{
+      return await postJsonOnce(primaryBase, proxySecret, path, payload);
+    }catch(e){
+      // si c'est du "Failed to fetch" (DNS/CSP/Network), retente sur fallback
+      if (fallbackBase && isNetworkFetchError(e)) {
+        try{
+          return await postJsonOnce(fallbackBase, proxySecret, path, payload);
+        }catch(e2){
+          // si fallback échoue aussi, remonte l'erreur fallback (plus utile)
+          throw e2;
+        }
+      }
+      throw e;
+    }
+  }
+
   async function open(opts){
     const token = String(opts?.token || "").trim();
     const proxySecret = String(opts?.proxySecret || "").trim();
     const pk = String(opts?.stripePublishableKey || "").trim();
+
+    const workerUrl = normBase(opts?.workerUrl);
+    const apiUrl    = normBase(opts?.apiUrl || "https://api.ulydia.com");
 
     if (!token || !proxySecret || !pk) {
       alert("Billing module: missing config (token / proxySecret / stripePublishableKey).");
       return;
     }
 
-    // modal: soit tu utilises celui du host, soit fallback simple
     const openModal = opts?.openModal || null;
 
     const content = document.createElement("div");
@@ -124,12 +145,8 @@
     `;
 
     let modal = null;
-    if (openModal) {
-      modal = openModal({ title: "Change payment method", content });
-    } else {
-      alert("No modal provided by host. (Pass openModal from my-account/users-role modal system.)");
-      return;
-    }
+    if (openModal) modal = openModal({ title: "Change payment method", content });
+    else { alert("No modal provided by host."); return; }
 
     const btnSave = content.querySelector("#ub_save");
     const btnCancel = content.querySelector("#ub_cancel");
@@ -137,15 +154,15 @@
     btnCancel.onclick = () => modal?.close?.();
 
     try{
-      // 0) resolve base (api.ulydia.com -> fallback workers.dev)
-      const baseUrl = await resolveApiBase(opts);
-      if (!baseUrl) throw new Error("Missing API base URL");
+      // base “préférée” + fallback
+      const preferred = await resolveApiBase(opts);         // souvent api.ulydia.com
+      const fallback  = (preferred === apiUrl ? workerUrl : apiUrl) || workerUrl || apiUrl;
 
       await loadStripeJsOnce();
       const stripe = window.Stripe(pk);
 
-      // 1) SetupIntent
-      const si = await postJson(baseUrl, proxySecret, "/billing/setup-intent", { token });
+      // 1) SetupIntent (avec retry auto)
+      const si = await postJsonSmart(preferred, fallback, proxySecret, "/billing/setup-intent", { token });
       const clientSecret = String(si.client_secret || "");
       if (!clientSecret) throw new Error("Missing client_secret");
 
@@ -159,10 +176,7 @@
           btnSave.disabled = true;
           err.textContent = "";
 
-          const result = await stripe.confirmCardSetup(clientSecret, {
-            payment_method: { card }
-          });
-
+          const result = await stripe.confirmCardSetup(clientSecret, { payment_method: { card } });
           if (result.error) {
             err.textContent = result.error.message || "Card error";
             btnSave.disabled = false;
@@ -172,7 +186,8 @@
           const pmId = result.setupIntent?.payment_method;
           if (!pmId) throw new Error("Missing payment_method id");
 
-          await postJson(baseUrl, proxySecret, "/billing/set-default", {
+          // 3) set default (avec retry auto)
+          await postJsonSmart(preferred, fallback, proxySecret, "/billing/set-default", {
             token,
             payment_method: pmId
           });
