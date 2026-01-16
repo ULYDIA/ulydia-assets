@@ -1,14 +1,15 @@
-/* users-roles.js — Ulydia (V4.4)
+/* users-roles.js — Ulydia (V4.5)
    - Tokenless + RLS
    - RPC create_company_invite
    - RPC resend_company_invite (resend/renew)
-   - ✅ Resend cooldown with LIVE countdown (60s)
+   - ✅ Resend cooldown with LIVE countdown (DOM-only, real-time)
    - ✅ Copy invite link
    - ✅ Expiration (7 days) -> shows "expired" + renew
+   - Never freezes page (modal always closable)
 */
 (() => {
-  if (window.__ULYDIA_USERS_ROLES_V44__) return;
-  window.__ULYDIA_USERS_ROLES_V44__ = true;
+  if (window.__ULYDIA_USERS_ROLES_V45__) return;
+  window.__ULYDIA_USERS_ROLES_V45__ = true;
 
   const NS = "[Users&Roles]";
 
@@ -30,7 +31,6 @@
     const t = Date.parse(String(d || ""));
     return Number.isFinite(t) ? t : NaN;
   }
-
   function escapeHtml(s) {
     return String(s ?? "")
       .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -80,8 +80,7 @@
     return nowMs() > expMs;
   }
 
-  function cooldownLeftSeconds(inv){
-    const lastSentMs = toMs(inv?.last_sent_at);
+  function cooldownLeftSecondsFromMs(lastSentMs){
     if (!Number.isFinite(lastSentMs)) return 0;
     const elapsed = (nowMs() - lastSentMs) / 1000;
     const left = RESEND_COOLDOWN_SECONDS - elapsed;
@@ -371,7 +370,6 @@
     if (error) throw error;
   }
 
-  // ---------- Render ----------
   function renderMembers(modal, ctx, members) {
     const tb = qs("#u_ur_members_tbody", modal);
     tb.innerHTML = "";
@@ -400,8 +398,7 @@
         </td>
       `;
 
-      const canEdit = !!ctx.is_admin;
-      qsa("button", tr).forEach(b => { if (!canEdit) b.disabled = true; });
+      qsa("button", tr).forEach(b => { if (!ctx.is_admin) b.disabled = true; });
 
       if (String(m.user_id) === String(me)) {
         const btnRemove = qs('button[data-act="remove"]', tr);
@@ -459,21 +456,26 @@
     }
 
     invites.forEach((inv) => {
+      const expMs = computeExpiryMs(inv);
+      const lastMs = toMs(inv?.last_sent_at);
       const expired = isExpired(inv);
-      const left = cooldownLeftSeconds(inv);
+      const left = cooldownLeftSecondsFromMs(lastMs);
       const hasToken = !!String(inv.token || "").trim();
 
       const statusLabel = expired
         ? `<span class="u-ur-pill expired">expired</span>`
         : `<span class="u-ur-pill">${escapeHtml(inv.status || "pending")}</span>`;
 
-      const resendLabel = expired ? "renew" : (left > 0 ? `resend (${left}s)` : "resend");
-
       const canCopy = (!expired && hasToken);
       const canResend = (left === 0);
 
       const tr = document.createElement("tr");
       tr.setAttribute("data-invite-id", inv.id);
+
+      // ✅ store timings in DOM (for real-time countdown)
+      tr.dataset.expMs = Number.isFinite(expMs) ? String(expMs) : "";
+      tr.dataset.lastMs = Number.isFinite(lastMs) ? String(lastMs) : "";
+      tr.dataset.isExpired = expired ? "1" : "0";
 
       tr.innerHTML = `
         <td>${escapeHtml(inv.email || "")}</td>
@@ -482,7 +484,7 @@
         <td>
           <div class="u-ur-actions">
             <button class="u-ur-btn" data-act="copy" ${canCopy ? "" : "disabled"}>copy link</button>
-            <button class="u-ur-btn" data-act="resend" ${canResend ? "" : "disabled"}>${escapeHtml(resendLabel)}</button>
+            <button class="u-ur-btn" data-act="resend" ${canResend ? "" : "disabled"}>resend</button>
             <button class="u-ur-btn danger" data-act="cancel">cancel</button>
           </div>
         </td>
@@ -521,21 +523,32 @@
           }
 
           if (act === "resend") {
-            const l = cooldownLeftSeconds(inv);
+            // DOM-based cooldown check
+            const row = btn.closest('tr[data-invite-id]');
+            const rowLastMs = Number(row?.dataset?.lastMs || "");
+            const l = cooldownLeftSecondsFromMs(rowLastMs);
             if (l > 0) {
               setMsg("err", `Please wait ${l}s before resending.`);
               return;
             }
 
-            const res = await api._api.resendInvite(inv.id);
-            setMsg("ok", expired ? `Invitation renewed for ${inv.email}.` : `Invitation resent to ${inv.email}.`);
+            const rowExpired = (row?.dataset?.isExpired === "1") || (Number(row?.dataset?.expMs || "") && nowMs() > Number(row.dataset.expMs));
 
-            await api.refresh();
+            await api._api.resendInvite(inv.id);
 
-            // optional: if backend returns token, refresh UI cache faster
-            if (res?.token) {
-              // noop; refresh already done
+            // ✅ Update datasets immediately for real-time countdown
+            const n = nowMs();
+            if (row) {
+              row.dataset.lastMs = String(n);
+              row.dataset.expMs = String(n + INVITE_EXPIRE_DAYS * 24 * 3600 * 1000);
+              row.dataset.isExpired = "0";
             }
+
+            api.startTick(); // ensure running
+            setMsg("ok", rowExpired ? `Invitation renewed for ${inv.email}.` : `Invitation resent to ${inv.email}.`);
+
+            // refresh to fetch server-side token/fields if changed
+            await api.refresh();
             return;
           }
         } catch (ex) {
@@ -549,6 +562,9 @@
 
       tb.appendChild(tr);
     });
+
+    // First paint of countdown labels
+    api.startTick();
   }
 
   // ---------- Public API ----------
@@ -557,41 +573,53 @@
     _ctx: null,
     _modal: null,
     _api: null,
-
-    // ✅ cache for LIVE countdown
-    _invitesCache: [],
     _tick: null,
 
     startTick(){
       if (api._tick) clearInterval(api._tick);
 
       api._tick = setInterval(() => {
-        if (!api._modal || !document.body.contains(api._modal)) {
-          api.stopTick();
-          return;
+        try {
+          if (!api._modal || !document.body.contains(api._modal)) {
+            api.stopTick();
+            return;
+          }
+
+          const tbody = qs("#u_ur_invites_tbody", api._modal);
+          if (!tbody) return;
+
+          const rows = Array.from(tbody.querySelectorAll('tr[data-invite-id]'));
+          const now = nowMs();
+
+          for (const tr of rows) {
+            const btn = tr.querySelector('button[data-act="resend"]');
+            if (!btn) continue;
+
+            const expMs  = Number(tr.dataset.expMs || "");
+            const lastMs = Number(tr.dataset.lastMs || "");
+
+            const expired = (tr.dataset.isExpired === "1") || (Number.isFinite(expMs) && now > expMs);
+
+            let left = 0;
+            if (Number.isFinite(lastMs) && lastMs > 0) {
+              const elapsed = (now - lastMs) / 1000;
+              const l = RESEND_COOLDOWN_SECONDS - elapsed;
+              left = l > 0 ? Math.ceil(l) : 0;
+            }
+
+            // label
+            btn.textContent = expired ? "renew" : (left > 0 ? `resend (${left}s)` : "resend");
+
+            // disable if cooldown running (admin-only is handled too)
+            btn.disabled = (!api._ctx?.is_admin) || (left > 0);
+
+            // keep dataset in sync for expiry
+            tr.dataset.isExpired = expired ? "1" : "0";
+          }
+        } catch (e) {
+          console.error(NS, "tick error", e);
         }
-
-        const tbody = qs("#u_ur_invites_tbody", api._modal);
-        if (!tbody) return;
-
-        const rows = Array.from(tbody.querySelectorAll("tr[data-invite-id]"));
-        for (const tr of rows) {
-          const inviteId = tr.getAttribute("data-invite-id");
-          if (!inviteId) continue;
-
-          const inv = (api._invitesCache || []).find(x => String(x.id) === String(inviteId));
-          if (!inv) continue;
-
-          const btn = tr.querySelector('button[data-act="resend"]');
-          if (!btn) continue;
-
-          const expired = isExpired(inv);
-          const left = cooldownLeftSeconds(inv);
-
-          btn.textContent = expired ? "renew" : (left > 0 ? `resend (${left}s)` : "resend");
-          btn.disabled = (!!(left > 0)) || !api._ctx?.is_admin;
-        }
-      }, 1000);
+      }, 250); // smooth real-time UI
     },
 
     stopTick(){
@@ -700,12 +728,10 @@
           loadInvites(sb, ctx.company_id),
         ]);
 
-        api._invitesCache = invites || [];
-
         renderMembers(modal, ctx, members);
-        renderInvites(modal, ctx, api._invitesCache);
+        renderInvites(modal, ctx, invites);
 
-        api.startTick(); // ✅ LIVE countdown
+        api.startTick(); // ensure running after refresh
       } catch (ex) {
         err(ex);
         setMsg("err", ex?.message || String(ex));
@@ -716,5 +742,5 @@
   window.UlydiaUsersRoles = api;
   window.UsersRoles = api;
 
-  log("loaded (V4.4). Call UlydiaUsersRoles.open()");
+  log("loaded (V4.5). Call UlydiaUsersRoles.open()");
 })();
