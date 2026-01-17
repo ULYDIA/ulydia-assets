@@ -70,6 +70,31 @@
     return { close };
   }
 
+
+async function open(opts){
+  // refuse si ce n’est pas un vrai clic utilisateur
+  if (!opts || opts.fromUserClick !== true) {
+    console.warn("[Billing] blocked: open() must be triggered by user click.");
+    return;
+  }
+
+  // anti rafale
+  if (window.__ULYDIA_BILLING_OPENING__) return;
+  window.__ULYDIA_BILLING_OPENING__ = true;
+
+  try {
+    // ... le reste de ton open()
+  } finally {
+    window.__ULYDIA_BILLING_OPENING__ = false;
+  }
+}
+
+
+
+
+
+
+
   async function open(opts){
     // ✅ HARD SAFETY: refuse auto-open (must come from click)
     if (!opts || opts.fromUserClick !== true) {
