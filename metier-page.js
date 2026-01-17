@@ -1,261 +1,225 @@
-/* metier-page.js — Ulydia (PROD v4)
-   - No flash: hides banners until sponsor verdict
-   - Fetch sponsor verdict (POST /sponsor-info)
-   - If sponsored: set both banners (logo_2 -> banner1, logo_1 -> banner2) + click link
-   - If sponsor.link missing: fallback to /sponsor?metier=...&country=...
-   - Emits uydia:sponsor-ready + sets SPONSORED_ACTIVE early
-*/
+<script>
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_PROD_V4__) return;
-  window.__ULYDIA_METIER_PAGE_PROD_V4__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V3__) return;
+  window.__ULYDIA_METIER_PAGE_V3__ = true;
 
+  // =========================================================
+  // CONFIG
+  // =========================================================
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
-  const ENDPOINT     = "/sponsor-info";
 
-  const BANNER_1_ID  = "nonSponsorBanner01"; // landscape slot
-  const BANNER_2_ID  = "nonSponsorBanner02"; // square slot
+  // Endpoint unique (on arrête de "probe" maintenant que c'est OK)
+  const SPONSOR_ENDPOINT = "/sponsor-info";
 
-  // Hide banners until verdict (prevents non-sponsor flash)
-  const HIDE_CLASS = "ulydia-sponsor-loading";
+  // Blocks
+  const ID_SPONSORED_BLOCK     = "block-sponsored";
+  const ID_NOT_SPONSORED_BLOCK = "block-not-sponsored";
+
+  // =========================================================
+  // HARD HIDE IMMEDIATELY (anti flash)
+  // =========================================================
+  const antiFlashCss = document.createElement("style");
+  antiFlashCss.id = "ulydia-sponsor-antiflash";
+  antiFlashCss.textContent = `
+    /* On cache les 2 blocs tant que la décision n'est pas prise */
+    #${ID_SPONSORED_BLOCK}, #${ID_NOT_SPONSORED_BLOCK}{ display:none !important; }
+    html.ulydia-sponsor-loading #${ID_SPONSORED_BLOCK},
+    html.ulydia-sponsor-loading #${ID_NOT_SPONSORED_BLOCK}{ display:none !important; }
+  `;
+  document.head.appendChild(antiFlashCss);
+  try { document.documentElement.classList.add("ulydia-sponsor-loading"); } catch(e){}
+
+  // =========================================================
+  // HELPERS
+  // =========================================================
+  const qp = (name) => new URLSearchParams(location.search).get(name);
+  const $  = (id) => document.getElementById(id);
 
   function apiBase(){ return String(WORKER_URL || "").replace(/\/$/, ""); }
-  function $(id){ return document.getElementById(id); }
 
-  function qp(name){ return new URLSearchParams(location.search).get(name); }
+  function normIso(v){
+    return String(v || "").trim().toUpperCase().replace(/[^A-Z]/g, "");
+  }
+  function normLang(v){
+    return String(v || "").trim().toLowerCase().split("-")[0];
+  }
 
-  function getMetier(){
-    return (
-      document.querySelector("[data-metier]")?.getAttribute("data-metier") ||
-      document.getElementById("metier-slug")?.textContent?.trim() ||
-      qp("metier")?.trim() ||
-      location.pathname.split("/").filter(Boolean).pop() ||
-      ""
-    );
+  function findMetierSlug(){
+    const fromQP = (qp("metier") || "").trim();
+    if (fromQP) return fromQP;
+
+    const any = document.querySelector("[data-metier]");
+    if (any){
+      const v = (any.getAttribute("data-metier") || "").trim();
+      if (v) return v;
+    }
+
+    const parts = location.pathname.split("/").filter(Boolean);
+    return parts[parts.length - 1] || "";
   }
 
   function getCountry(){
-    return String(
-      window.VISITOR_COUNTRY ||
-      qp("country") ||
-      "FR"
-    ).toUpperCase();
+    return (
+      normIso(window.VISITOR_COUNTRY) ||
+      normIso(qp("country")) ||
+      normIso(document.getElementById("country-iso")?.textContent) ||
+      "US"
+    );
   }
 
-  function sponsorFallbackUrl(metier, country){
-    return `/sponsor?metier=${encodeURIComponent(metier)}&country=${encodeURIComponent(country)}`;
+  function getLang(){
+    return (
+      normLang(window.VISITOR_LANG) ||
+      normLang(qp("lang")) ||
+      normLang(document.getElementById("country-lang")?.textContent) ||
+      "en"
+    );
   }
 
-  function installHideStyle(){
-    if (document.getElementById("ul_sponsor_hide_css")) return;
-    const s = document.createElement("style");
-    s.id = "ul_sponsor_hide_css";
-    s.textContent = `
-      html.${HIDE_CLASS} #${BANNER_1_ID},
-      html.${HIDE_CLASS} #${BANNER_2_ID}{
-        visibility:hidden !important;
-        opacity:0 !important;
-      }
-    `;
-    document.head.appendChild(s);
+  function pickUrl(v){
+    if (!v) return "";
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return (v[0]?.url || v[0]?.thumbnails?.large?.url || v[0]?.thumbnails?.full?.url || "").trim();
+    if (typeof v === "object") return (v.url || v.thumbnails?.large?.url || v.thumbnails?.full?.url || "").trim();
+    return "";
   }
 
-  function setLoading(on){
+  function setImgHard(imgEl, url){
+    if (!imgEl || !url) return;
     try{
-      installHideStyle();
-      if (on) document.documentElement.classList.add(HIDE_CLASS);
-      else document.documentElement.classList.remove(HIDE_CLASS);
+      imgEl.removeAttribute("srcset");
+      imgEl.removeAttribute("sizes");
+      imgEl.setAttribute("src", url);
+      imgEl.setAttribute("srcset", url);
+      imgEl.style.visibility = "";
+      imgEl.style.opacity = "";
     }catch(e){}
   }
 
-  function setImgHard(el, url){
-    if (!el || !url) return false;
-
-    if (el.tagName && el.tagName.toLowerCase() === "img") {
-      el.removeAttribute("srcset");
-      el.removeAttribute("sizes");
-      el.setAttribute("src", url);
-      el.setAttribute("srcset", "");
-      el.style.opacity = "0.999";
-      requestAnimationFrame(() => { el.style.opacity = ""; });
-      return true;
-    }
-
-    const img = el.querySelector && el.querySelector("img");
-    if (img) return setImgHard(img, url);
-
-    try{
-      el.style.backgroundImage = `url("${url}")`;
-      el.style.backgroundSize = "cover";
-      el.style.backgroundPosition = "center";
-      el.style.backgroundRepeat = "no-repeat";
-      return true;
-    }catch(e){}
-    return false;
+  function showBlock(which){
+    const s = $(ID_SPONSORED_BLOCK);
+    const n = $(ID_NOT_SPONSORED_BLOCK);
+    if (s) s.style.display = (which === "sponsored") ? "" : "none";
+    if (n) n.style.display = (which === "notsponsored") ? "" : "none";
   }
 
-  // Click guarantee via overlay <a> above banners
-  function ensureOverlayLayer(){
-    let c = document.getElementById("ul_sponsor_overlay_layer");
-    if (c) return c;
-    c = document.createElement("div");
-    c.id = "ul_sponsor_overlay_layer";
-    c.style.position = "fixed";
-    c.style.left = "0";
-    c.style.top = "0";
-    c.style.width = "100%";
-    c.style.height = "100%";
-    c.style.zIndex = "2147483647";
-    c.style.pointerEvents = "none";
-    c.style.background = "transparent";
-    document.body.appendChild(c);
-    return c;
-  }
-
-  function placeOverlay(id, rect, url){
-    const layer = ensureOverlayLayer();
-    let a = document.getElementById(id);
-    if (!a){
-      a = document.createElement("a");
-      a.id = id;
-      a.style.position = "absolute";
-      a.style.display = "block";
+  function makeClickable(el, url){
+    if (!el || !url) return;
+    // si image dans un <a>, on met le href sur le <a>
+    const a = el.closest("a");
+    if (a){
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
       a.style.pointerEvents = "auto";
-      a.style.background = "transparent";
-      a.style.cursor = "pointer";
-      layer.appendChild(a);
+      return;
     }
-    a.setAttribute("href", url);
-    a.setAttribute("target", "_blank");
-    a.setAttribute("rel", "noopener noreferrer");
-
-    a.style.left = Math.max(0, rect.left) + "px";
-    a.style.top = Math.max(0, rect.top) + "px";
-    a.style.width = Math.max(0, rect.width) + "px";
-    a.style.height = Math.max(0, rect.height) + "px";
-
-    const active = rect.width > 5 && rect.height > 5;
-    a.style.pointerEvents = active ? "auto" : "none";
+    // sinon on rend l'image cliquable
+    el.style.cursor = "pointer";
+    el.style.pointerEvents = "auto";
+    el.addEventListener("click", () => window.open(url, "_blank", "noopener,noreferrer"));
   }
 
-  function bindOverlays(el1, el2, url){
-    if (!url) return;
+  function applySponsoredUI(info){
+    const sponsor = info?.sponsor || {};
+    const link = String(sponsor.link || "").trim();
+    const logo1 = pickUrl(sponsor.logo_1);
+    const logo2 = pickUrl(sponsor.logo_2);
 
-    const update = () => {
-      if (el1) placeOverlay("ul_sponsor_click_1", el1.getBoundingClientRect(), url);
-      if (el2) placeOverlay("ul_sponsor_click_2", el2.getBoundingClientRect(), url);
-    };
+    // Sélecteurs tolérants (car tes IDs changent selon pages Webflow)
+    const imgSquare =
+      document.getElementById("sponsor-logo-1") ||
+      document.querySelector('[data-sponsor-img="square"]') ||
+      document.querySelector("#block-sponsored img") ||
+      null;
 
-    update();
+    const imgLandscape =
+      document.getElementById("sponsor-logo-2") ||
+      document.querySelector('[data-sponsor-img="landscape"]') ||
+      document.querySelectorAll("#block-sponsored img")[1] ||
+      null;
 
-    let raf = 0;
-    const onMove = () => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => { raf = 0; update(); });
-    };
+    if (logo1 && imgSquare) setImgHard(imgSquare, logo1);
+    if (logo2 && imgLandscape) setImgHard(imgLandscape, logo2);
 
-    window.addEventListener("scroll", onMove, { passive: true });
-    window.addEventListener("resize", onMove, { passive: true });
+    if (link){
+      if (imgSquare) makeClickable(imgSquare, link);
+      if (imgLandscape) makeClickable(imgLandscape, link);
 
-    setTimeout(update, 250);
-    setTimeout(update, 800);
-    setTimeout(update, 1600);
-  }
-
-  function emitSponsorReady(sponsored, payload){
-    try{
-      window.dispatchEvent(new CustomEvent("ulydia:sponsor-ready", {
-        detail: { sponsored: !!sponsored, payload: payload || null }
-      }));
-    }catch(e){}
+      // optionnel : tous les liens "sponsor" connus
+      document.querySelectorAll('[data-role="sponsor-link"],[data-sponsor-link="true"],a[data-action="sponsor"]').forEach(a=>{
+        try{
+          a.href = link; a.target="_blank"; a.rel="noopener noreferrer";
+          a.style.pointerEvents="auto";
+        }catch(e){}
+      });
+    }
   }
 
   async function fetchSponsorInfo(metier, country, lang){
-    const res = await fetch(apiBase() + ENDPOINT, {
+    const url = apiBase() + SPONSOR_ENDPOINT;
+    const res = await fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "x-proxy-secret": PROXY_SECRET
       },
-      body: JSON.stringify({ metier, country, lang }),
-      cache: "no-store"
+      body: JSON.stringify({ metier, country, lang })
     });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data) return null;
+
+    const data = await res.json().catch(()=>null);
+    if (!res.ok) throw new Error((data && (data.error || data.message)) || ("HTTP " + res.status));
     return data;
   }
 
-  (async () => {
-    // Mark page as sponsor-aware for other scripts
-    window.__ULYDIA_PAGE_SPONSOR_SCRIPT__ = true;
+  function finish(){
+    try { document.documentElement.classList.remove("ulydia-sponsor-loading"); } catch(e){}
+    // on peut laisser le CSS antiflash, ou le retirer :
+    // antiFlashCss.remove();
+  }
 
-    const el1 = $(BANNER_1_ID);
-    const el2 = $(BANNER_2_ID);
-
-    // If banners not present, nothing to do
-    if (!el1 && !el2) return;
-
-    // Hide banners immediately to prevent flash
-    setLoading(true);
-
-    const metier = getMetier();
+  // =========================================================
+  // BOOT
+  // =========================================================
+  (async function boot(){
+    const metier = findMetierSlug();
     const country = getCountry();
-    const lang = String(window.VISITOR_LANG || qp("lang") || "en").toLowerCase().split("-")[0];
+    const lang = getLang();
 
-    if (!metier || !country) {
-      window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored: false };
-      window.SPONSORED_ACTIVE = false;
-      emitSponsorReady(false, { error: "missing_metier_or_country" });
-      setLoading(false);
+    if (!metier){
+      showBlock("notsponsored");
+      finish();
       return;
     }
 
-    const data = await fetchSponsorInfo(metier, country, lang);
+    try{
+      const info = await fetchSponsorInfo(metier, country, lang);
 
-    // If worker failed, fall back to non-sponsored behavior (let footer handle)
-    if (!data) {
-      window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored: false };
-      window.SPONSORED_ACTIVE = false;
-      emitSponsorReady(false, { error: "worker_no_data" });
-      setLoading(false);
-      return;
+      const sponsored = !!info?.sponsored;
+      window.SPONSORED_ACTIVE = sponsored;
+
+      if (sponsored){
+        applySponsoredUI(info);
+        showBlock("sponsored");
+      } else {
+        showBlock("notsponsored");
+      }
+
+      // event utile pour ton footer global si besoin
+      try{
+        window.dispatchEvent(new CustomEvent("ulydia:sponsor-ready", { detail: { sponsored, payload: info }}));
+      }catch(e){}
+
+    } catch(err){
+      // fail-safe: on montre non sponsored
+      console.warn("[metier-page] sponsor check failed:", err);
+      showBlock("notsponsored");
+    } finally {
+      finish();
     }
-
-    const sponsored = !!data.sponsored;
-    window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored };
-
-    if (!sponsored) {
-      window.SPONSORED_ACTIVE = false;
-      emitSponsorReady(false, data);
-      // show banners back (footer will put translated non-sponsor)
-      setLoading(false);
-      return;
-    }
-
-    // Sponsored: set flag early
-    window.SPONSORED_ACTIVE = true;
-
-    const sponsor = data.sponsor || {};
-    const urlLandscape = String(sponsor.logo_2 || "").trim();
-    const urlSquare    = String(sponsor.logo_1 || "").trim();
-
-    const target1 = urlLandscape || urlSquare;
-    const target2 = urlSquare || urlLandscape;
-
-    if (el1 && target1) setImgHard(el1, target1);
-    if (el2 && target2) setImgHard(el2, target2);
-
-    // Link: sponsor.link OR fallback to /sponsor?metier&country
-    const sponsorLink = String(sponsor.link || "").trim();
-    const clickUrl = sponsorLink || sponsorFallbackUrl(metier, country);
-
-    // Click overlays above banners (guaranteed)
-    bindOverlays(el1, el2, clickUrl);
-
-    emitSponsorReady(true, data);
-
-    // Finally show banners
-    setLoading(false);
   })();
 
 })();
+</script>
+
