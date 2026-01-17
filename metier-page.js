@@ -4,13 +4,9 @@
    - Country-specific sections only if they exist
    - Includes sponsor intent (CTA -> login -> sponsor) in same file
 */
-
-((() => {
+(() => {
   if (window.__ULYDIA_METIER_PAGE_V1__) return;
   window.__ULYDIA_METIER_PAGE_V1__ = true;
-
-  const DEBUG = !!window.__METIER_PAGE_DEBUG__;
-  function log(...a){ if (DEBUG) console.log("[metier-page]", ...a); }
 
   // =========================================================
   // CONFIG
@@ -22,14 +18,14 @@
   const LOGIN_URL  = "/login";
   const SPONSOR_URL = "/sponsor";
 
-  const ENDPOINT_METIER_PAGE = "/metier-page";    // optional
-  const ENDPOINT_SPONSOR_INFO = "/sponsor-info";  // existing
+  // Preferred endpoint (recommended to add in Worker)
+  const ENDPOINT_METIER_PAGE = "/metier-page";
+
+  // Fallback sponsor endpoint (already exists in your Worker)
+  const ENDPOINT_SPONSOR_INFO = "/sponsor-info";
 
   const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
   const CC_CACHE_HOURS = 6;
-
-  // ✅ ONE ROOT ID FOR EVERYTHING
-  const ROOT_ID = "ul_metier_root";
 
   // =========================================================
   // Helpers
@@ -38,6 +34,7 @@
   const $id = (id) => document.getElementById(id);
 
   const qp = (k) => new URLSearchParams(location.search).get(k);
+
   function apiBase() { return WORKER_URL.replace(/\/$/, ""); }
 
   function safeUpper(s){ return String(s || "").trim().toUpperCase(); }
@@ -92,10 +89,8 @@
       },
       body: JSON.stringify(payload || {})
     });
-    const txt = await res.text().catch(() => "");
-    let data = {};
-    try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
-    if (!res.ok) throw new Error(data.error || data.message || txt || "Worker error");
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Worker error");
     return data;
   }
 
@@ -138,17 +133,21 @@
   // Metier slug
   // =========================================================
   function getMetierSlug(){
+    // 1) explicit element (your current method)
     const s1 = safeStr($(".metier-slug")?.textContent);
     if (s1) return s1;
 
+    // 2) query param
     const s2 = safeStr(qp("metier") || qp("slug"));
     if (s2) return s2;
 
+    // 3) pathname last segment
     const parts = String(location.pathname || "").split("/").filter(Boolean);
     return parts[parts.length - 1] || "";
   }
 
   function getLang(){
+    // optional: from query, or html lang, fallback en
     const q = safeStr(qp("lang"));
     if (q) return q.toLowerCase();
     const h = safeStr(document.documentElement.getAttribute("lang"));
@@ -157,7 +156,7 @@
   }
 
   // =========================================================
-  // UI: CSS + Root
+  // UI: CSS + Loader
   // =========================================================
   function injectCSS(){
     if ($id("ul_metier_css")) return;
@@ -169,12 +168,13 @@
   --ul-ink: #101828;
   --ul-muted: #667085;
   --ul-line: rgba(16,24,40,.10);
+  --ul-bg: #ffffff;
   --ul-card: #ffffff;
   --ul-shadow: 0 10px 30px rgba(16,24,40,.08);
   --ul-radius: 22px;
 }
 
-#${ROOT_ID}{
+#ul_metier_root{
   font-family: var(--ul-font);
   color: var(--ul-ink);
   background: transparent;
@@ -332,6 +332,7 @@
   font-weight: 700;
   font-size: 14px;
 }
+
     `.trim();
 
     const style = document.createElement("style");
@@ -341,12 +342,11 @@
   }
 
   function getRoot(){
-    let root = $id(ROOT_ID);
+    let root = $id("ul_metier_root");
     if (!root) {
       root = document.createElement("div");
-      root.id = ROOT_ID;
-      document.body.prepend(root);
-      log("root auto-created:", ROOT_ID);
+      root.id = "ul_metier_root";
+      document.body.appendChild(root);
     }
     return root;
   }
@@ -372,7 +372,7 @@
   }
 
   // =========================================================
-  // Sponsor intent (CTA)
+  // Sponsor intent (single-file replacement of your second script)
   // =========================================================
   function buildNext(metier, country){
     const url = new URL(location.origin + SPONSOR_URL);
@@ -382,8 +382,11 @@
   }
 
   async function isLoggedInFast(){
+    // Uses existing window.supabase if present on the page
     if (!window.supabase?.createClient) return false;
     try{
+      // Use your existing project keys via already initialized client if exists
+      // (If you want, we can embed your anon key here like in your current script)
       const SUPABASE_URL = "https://zwnkscepqwujkcxusknn.supabase.co";
       const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp3bmtzY2VwcXd1amtjeHVza25uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgyNDY1OTIsImV4cCI6MjA4MzgyMjU5Mn0.WALx2WeXlCDWhD0JA8L0inPBDtlJOlh9UQm7Z-U2D38";
       window.__UL_SB__ ||= window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -414,27 +417,17 @@
       try { localStorage.setItem("ULYDIA_AUTH_NEXT", next); } catch(_){}
 
       const logged = await isLoggedInFast();
-      location.href = logged ? next : `${LOGIN_URL}?next=${encodeURIComponent(next)}`;
+      if (logged) {
+        location.href = next;
+      } else {
+        location.href = `${LOGIN_URL}?next=${encodeURIComponent(next)}`;
+      }
     }, true);
   }
 
   // =========================================================
   // Rendering
   // =========================================================
-  function renderSection(title, html){
-    const t = safeStr(title);
-    const h = safeStr(html);
-    if (!t && !h) return null;
-
-    const rich = el("div", { class:"ul-rich" });
-    if (h) setHTML(rich, h);
-
-    return el("div", { class:"ul-section" }, [
-      t ? el("div", { class:"ul-h2" }, [t]) : null,
-      rich
-    ].filter(Boolean));
-  }
-
   function renderPage(root, data){
     const metier  = safeStr(data?.metier);
     const country = safeUpper(data?.country);
@@ -471,38 +464,47 @@
     ]);
 
     // Left main content
-    const leftChildren = [
+    const left = el("div", { class:"ul-card" }, [
       el("div", { class:"ul-card-body" }, [
-        el("div", { class:"ul-mini" }, [ sponsored ? "Sponsored content" : "Not sponsored" ])
-      ])
-    ];
-
-    // global sections
-    globalSections.forEach(sec => {
-      const node = renderSection(sec?.title, sec?.html);
-      if (node) leftChildren.push(node);
-    });
-
-    // country section header + sections
-    if (csExists) {
-      leftChildren.push(
-        el("div", { class:"ul-section" }, [
-          el("div", { class:"ul-h2" }, [ safeStr(cs.title) || "Country specifics" ]),
-          el("div", { class:"ul-mini" }, ["Shown only when data exists for this country."])
+        el("div", { class:"ul-mini" }, [
+          sponsored ? "Sponsored content" : "Not sponsored"
         ])
-      );
-      cs.sections.forEach(sec => {
-        const node = renderSection(sec?.title, sec?.html);
-        if (node) leftChildren.push(node);
-      });
-    }
-
-    const left = el("div", { class:"ul-card" }, leftChildren);
+      ]),
+      ...globalSections.map(sec => {
+        const t = safeStr(sec?.title);
+        const html = safeStr(sec?.html);
+        if (!t && !html) return null;
+        return el("div", { class:"ul-section" }, [
+          t ? el("div", { class:"ul-h2" }, [t]) : null,
+          el("div", { class:"ul-rich" }, [])
+        ]);
+      }).filter(Boolean),
+      csExists ? el("div", { class:"ul-section" }, [
+        el("div", { class:"ul-h2" }, [ safeStr(cs.title) || "Country specifics" ]),
+        el("div", { class:"ul-mini" }, ["Shown only when data exists for this country."])
+      ]) : null,
+      ...(csExists ? cs.sections.map(sec => {
+        const t = safeStr(sec?.title);
+        const html = safeStr(sec?.html);
+        if (!t && !html) return null;
+        return el("div", { class:"ul-section" }, [
+          t ? el("div", { class:"ul-h2" }, [t]) : null,
+          el("div", { class:"ul-rich" }, [])
+        ]);
+      }).filter(Boolean) : [])
+    ]);
 
     // Right sponsor box
     const right = el("div", { class:"ul-sponsorBox" });
 
     if (sponsored) {
+      const banner1 = el("a", { class:"ul-banner", href: sponsorLink || "#", target: sponsorLink ? "_blank" : null, rel: sponsorLink ? "noopener" : null }, [
+        el("img", { alt:"Sponsor banner", src: logoLandscape || "" })
+      ]);
+      const banner2 = el("a", { class:"ul-banner", href: sponsorLink || "#", target: sponsorLink ? "_blank" : null, rel: sponsorLink ? "noopener" : null }, [
+        el("img", { alt:"Sponsor logo", src: logoSquare || "" })
+      ]);
+
       right.appendChild(el("div", { class:"ul-card" }, [
         el("div", { class:"ul-card-body" }, [
           el("div", { class:"ul-h2" }, ["Sponsor"]),
@@ -510,24 +512,19 @@
         ])
       ]));
 
-      right.appendChild(
-        el("a", { class:"ul-banner", href: sponsorLink || "#", target: sponsorLink ? "_blank" : null, rel: sponsorLink ? "noopener" : null }, [
-          el("img", { alt:"Sponsor banner", src: logoLandscape || "" })
-        ])
-      );
-
-      right.appendChild(
-        el("a", { class:"ul-banner", href: sponsorLink || "#", target: sponsorLink ? "_blank" : null, rel: sponsorLink ? "noopener" : null }, [
-          el("img", { alt:"Sponsor logo", src: logoSquare || "" })
-        ])
-      );
+      right.appendChild(banner1);
+      right.appendChild(banner2);
     } else {
       right.appendChild(el("div", { class:"ul-card" }, [
         el("div", { class:"ul-card-body" }, [
           el("div", { class:"ul-h2" }, ["Sponsor this page"]),
           el("div", { class:"ul-mini" }, ["Get visibility on this job page in this country."]),
           el("div", { style:"height:12px" }),
-          el("a", { class:"ul-btn ul-btn-primary", href:"#", "data-action":"sponsor" }, ["Sponsoriser cette fiche"])
+          el("a", {
+            class:"ul-btn ul-btn-primary",
+            href:"#",
+            "data-action":"sponsor"
+          }, ["Sponsoriser cette fiche"])
         ])
       ]));
     }
@@ -536,6 +533,29 @@
     const wrap = el("div", { class:"ul-wrap" }, [ hero, grid ]);
 
     root.appendChild(wrap);
+
+    // Fill rich HTML nodes (after DOM creation)
+    // We find sections by order: first all global, then country
+    const richNodes = root.querySelectorAll(".ul-section .ul-rich");
+    let idx = 0;
+
+    // global sections HTML
+    globalSections.forEach(sec => {
+      const html = safeStr(sec?.html);
+      if (!html) { idx++; return; }
+      setHTML(richNodes[idx], html);
+      idx++;
+    });
+
+    // country sections HTML
+    if (csExists) {
+      cs.sections.forEach(sec => {
+        const html = safeStr(sec?.html);
+        if (!html) { idx++; return; }
+        setHTML(richNodes[idx], html);
+        idx++;
+      });
+    }
 
     // bind CTA sponsor
     bindSponsorCTA(root, metier, country);
@@ -562,24 +582,29 @@
   }
 
   function setCache(key, data){
-    try{ localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch(_){}
+    try{
+      localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+    } catch(_){}
   }
 
   async function loadData(metier, country, lang){
+    // 1) try cached
     const key = cacheKey(metier, country, lang);
     const cached = getCache(key);
     if (cached) return cached;
 
-    // try full endpoint
+    // 2) try full endpoint
     try{
       const full = await postJson(ENDPOINT_METIER_PAGE, { metier, country, lang });
       if (full && typeof full === "object") {
         setCache(key, full);
         return full;
       }
-    } catch(e){ /* fallback */ }
+    } catch(e){
+      // ignore -> fallback
+    }
 
-    // fallback sponsor-only
+    // 3) fallback sponsor only
     const info = await postJson(ENDPOINT_SPONSOR_INFO, { metier, country });
     const fallback = {
       metier, country, lang,
@@ -616,16 +641,19 @@
         return;
       }
       if (!country) {
+        // still render with ?? but data calls need country
         renderError(root, "Missing country (cannot load sponsor/content).");
         return;
       }
 
       const data = await loadData(metier, country, lang);
 
+      // Ensure minimal fields
       data.metier = safeStr(data.metier || metier);
       data.country = safeUpper(data.country || country);
       data.lang = safeStr(data.lang || lang);
 
+      // Preload sponsor images to avoid flash
       const l1 = pickUrl(data?.sponsor?.logo_2);
       const l2 = pickUrl(data?.sponsor?.logo_1);
       await Promise.all([preloadImage(l1), preloadImage(l2)]);
