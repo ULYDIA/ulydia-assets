@@ -75,10 +75,10 @@
     }, { passive: false });
   }
 
-  function decided(){
-    // enlève l’anti-flash
-    document.documentElement.classList.remove("ul-sponsor-loading");
-  }
+function decided(){
+  window.__ULYDIA_SPONSOR_DECIDED__ = true;   // ✅ AJOUT IMPORTANT
+  document.documentElement.classList.remove("ul-sponsor-loading");
+}
 
   // =========================================================
   // CONTEXT (metier / country)
