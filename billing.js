@@ -1,7 +1,6 @@
 (() => {
   if (window.UlydiaBilling) return;
 
-  // ---------------- utils ----------------
   function normBase(u){ return String(u || "").trim().replace(/\/$/, ""); }
 
   function loadStripeJsOnce(){
@@ -15,89 +14,9 @@
     });
   }
 
-  async function fetchWithTimeout(url, opts = {}, ms = 3000){
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), ms);
-    try{
-      const res = await fetch(url, { ...opts, signal: ctrl.signal });
-      clearTimeout(t);
-      return res;
-    }catch(e){
-      clearTimeout(t);
-      throw e;
-    }
-  }
-
-  function isNetworkFetchError(e){
-    const msg = String(e?.message || e || "");
-    return (
-      msg.includes("Failed to fetch") ||
-      msg.includes("NetworkError") ||
-      msg.includes("ERR_NAME_NOT_RESOLVED") ||
-      msg.includes("aborted") ||
-      msg.includes("AbortError")
-    );
-  }
-
-  // ---------------- API base resolution ----------------
-  async function resolveApiBase(opts){
-    const worker = normBase(opts?.workerUrl);
-    const api    = normBase(opts?.apiUrl);
-
-    // ✅ reset cache on demand
-    if (opts?.resetCache) {
-      try{
-        delete window.__ULYDIA_BILLING_API_BASE__;
-        delete window.__ULYDIA_BILLING_API_BASE_KEY__;
-      }catch(_){}
-    }
-
-    // ✅ cache keyed by config
-    const key = `${worker}|${api}`;
-    if (
-      window.__ULYDIA_BILLING_API_BASE__ &&
-      window.__ULYDIA_BILLING_API_BASE_KEY__ === key
-    ) {
-      return window.__ULYDIA_BILLING_API_BASE__;
-    }
-
-    // ✅ Worker FIRST, then apiUrl
-    const candidates = [worker, api].filter(Boolean);
-
-    const testBase = async (base) => {
-      // We test /debug/cors on the worker (you already added it)
-      const url = base + "/debug/cors";
-      try{
-        const r = await fetchWithTimeout(url, {
-          method: "GET",
-          mode: "cors",
-          credentials: "omit",
-          cache: "no-store",
-        }, 1500);
-        return r.status === 200; // must be 200 for our worker route
-      }catch(_e){
-        return false;
-      }
-    };
-
-    for (const b of candidates){
-      if (await testBase(b)){
-        window.__ULYDIA_BILLING_API_BASE__ = b;
-        window.__ULYDIA_BILLING_API_BASE_KEY__ = key;
-        return b;
-      }
-    }
-
-    // fallback final
-    window.__ULYDIA_BILLING_API_BASE__ = worker || api;
-    window.__ULYDIA_BILLING_API_BASE_KEY__ = key;
-    return window.__ULYDIA_BILLING_API_BASE__;
-  }
-
-  // ---------------- POST helpers ----------------
-  async function postJsonOnce(baseUrl, proxySecret, path, payload){
+  async function postJson(baseUrl, proxySecret, path, payload){
     const base = normBase(baseUrl);
-    const url  = base + path;
+    const url = base + path;
 
     const res = await fetch(url, {
       method: "POST",
@@ -106,12 +25,14 @@
       cache: "no-store",
       headers: {
         "content-type": "application/json",
-        "x-proxy-secret": String(proxySecret || "").trim(),
+        // ✅ compat: certains workers checkent un header différent
+        "x-proxy-secret": proxySecret,
+        "x-ulydia-proxy-secret": proxySecret,
       },
       body: JSON.stringify(payload || {}),
     });
 
-    const txt = await res.text().catch(()=> "");
+    const txt = await res.text().catch(() => "");
     let data = {};
     try { data = txt ? JSON.parse(txt) : {}; } catch { data = { raw: txt }; }
 
@@ -121,62 +42,98 @@
     return data;
   }
 
-  async function postJsonSmart(primaryBase, fallbackBase, proxySecret, path, payload){
-    try{
-      return await postJsonOnce(primaryBase, proxySecret, path, payload);
-    }catch(e){
-      // only retry on genuine network fetch error
-      if (fallbackBase && isNetworkFetchError(e)) {
-        return await postJsonOnce(fallbackBase, proxySecret, path, payload);
-      }
-      throw e;
-    }
+  function defaultHostModal({ title, content }){
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;z-index:999999;padding:18px;";
+    const box = document.createElement("div");
+    box.style.cssText = "background:#fff;border-radius:16px;min-width:320px;max-width:min(560px,92vw);padding:16px;border:1px solid rgba(0,0,0,.12);";
+    const top = document.createElement("div");
+    top.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;";
+    const h = document.createElement("div");
+    h.textContent = title || "Billing";
+    h.style.cssText = "font-weight:900;";
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "Close";
+    closeBtn.style.cssText = "padding:8px 10px;border-radius:12px;border:1px solid rgba(0,0,0,.12);background:#fff;font-weight:800;cursor:pointer;";
+    top.appendChild(h);
+    top.appendChild(closeBtn);
+
+    box.appendChild(top);
+    box.appendChild(content);
+    wrap.appendChild(box);
+    document.body.appendChild(wrap);
+
+    function close(){ try{ wrap.remove(); }catch(_){} }
+    closeBtn.onclick = close;
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) close(); });
+
+    return { close };
   }
 
-  // ---------------- open ----------------
   async function open(opts){
+    // ✅ HARD SAFETY: refuse auto-open (must come from click)
+    if (!opts || opts.fromUserClick !== true) {
+      console.warn("[Billing] blocked: open() must be triggered by user click.");
+      return;
+    }
+
+    // ✅ anti-rafale / double open
+    if (window.__ULYDIA_BILLING_OPENING__) {
+      console.warn("[Billing] already opening, skip.");
+      return;
+    }
+    window.__ULYDIA_BILLING_OPENING__ = true;
+
     const token = String(opts?.token || "").trim();
     const proxySecret = String(opts?.proxySecret || "").trim();
     const pk = String(opts?.stripePublishableKey || "").trim();
 
-    const workerUrl = normBase(opts?.workerUrl);
-    const apiUrl    = normBase(opts?.apiUrl || workerUrl); // ✅ default: worker
+    // ✅ force Worker only
+    const base = normBase(opts?.apiUrl || opts?.workerUrl);
 
-    if (!token || !proxySecret || !pk) {
-      alert("Billing module: missing config (token / proxySecret / stripePublishableKey).");
+    if (!token || !proxySecret || !pk || !base) {
+      window.__ULYDIA_BILLING_OPENING__ = false;
+      alert("Billing module: missing config (token / proxySecret / stripePublishableKey / apiUrl).");
       return;
     }
 
-    const openModal = opts?.openModal || null;
-    if (!openModal) { alert("No modal provided by host."); return; }
+    const openModalFn = (typeof opts?.openModal === "function") ? opts.openModal : null;
 
     const content = document.createElement("div");
     content.innerHTML = `
-      <div style="font-weight:800;margin-bottom:10px">Enter a new card:</div>
+      <div style="font-weight:900;margin-bottom:10px">Enter a new card:</div>
       <div id="ub_card" style="padding:12px;border:1px solid rgba(0,0,0,.12);border-radius:12px;"></div>
-      <div id="ub_err" style="margin-top:10px;color:#a10f0f;font-weight:700;"></div>
+      <div id="ub_err" style="margin-top:10px;color:#a10f0f;font-weight:800;"></div>
       <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end">
-        <button id="ub_cancel" style="padding:10px 12px;border-radius:12px;border:1px solid rgba(0,0,0,.12);background:#fff;font-weight:700;cursor:pointer">Cancel</button>
-        <button id="ub_save" style="padding:10px 12px;border-radius:12px;border:1px solid #c00102;background:#c00102;color:#fff;font-weight:800;cursor:pointer">Save</button>
+        <button id="ub_cancel" style="padding:10px 12px;border-radius:12px;border:1px solid rgba(0,0,0,.12);background:#fff;font-weight:800;cursor:pointer">Cancel</button>
+        <button id="ub_save" style="padding:10px 12px;border-radius:12px;border:1px solid #c00102;background:#c00102;color:#fff;font-weight:900;cursor:pointer">Save</button>
       </div>
     `;
 
-    const modal = openModal({ title: "Change payment method", content });
+    let modal = null;
+    try{
+      modal = openModalFn ? openModalFn({ title: "Change payment method", content }) : defaultHostModal({ title:"Change payment method", content });
+    }catch(_e){
+      modal = defaultHostModal({ title:"Change payment method", content });
+    }
+
     const btnSave = content.querySelector("#ub_save");
     const btnCancel = content.querySelector("#ub_cancel");
     const err = content.querySelector("#ub_err");
-    btnCancel.onclick = () => modal?.close?.();
+
+    const closeAll = () => {
+      try{ modal?.close?.(); }catch(_){}
+      window.__ULYDIA_BILLING_OPENING__ = false;
+    };
+
+    btnCancel.onclick = closeAll;
 
     try{
-      // ✅ choose base (worker first) + fallback
-      const preferred = await resolveApiBase({ workerUrl, apiUrl, resetCache: opts?.resetCache });
-      const fallback  = (preferred === workerUrl ? apiUrl : workerUrl) || workerUrl || apiUrl;
-
       await loadStripeJsOnce();
       const stripe = window.Stripe(pk);
 
       // 1) SetupIntent
-      const si = await postJsonSmart(preferred, fallback, proxySecret, "/billing/setup-intent", { token });
+      const si = await postJson(base, proxySecret, "/billing/setup-intent", { token });
       const clientSecret = String(si.client_secret || "");
       if (!clientSecret) throw new Error("Missing client_secret");
 
@@ -186,6 +143,7 @@
       card.mount(content.querySelector("#ub_card"));
 
       btnSave.onclick = async () => {
+        if (btnSave.disabled) return;
         try{
           btnSave.disabled = true;
           err.textContent = "";
@@ -200,13 +158,10 @@
           const pmId = result.setupIntent?.payment_method;
           if (!pmId) throw new Error("Missing payment_method id");
 
-          // 3) Set default
-          await postJsonSmart(preferred, fallback, proxySecret, "/billing/set-default", {
-            token,
-            payment_method: pmId
-          });
+          // 3) set default
+          await postJson(base, proxySecret, "/billing/set-default", { token, payment_method: pmId });
 
-          modal?.close?.();
+          closeAll();
           alert("Payment method updated ✅");
         }catch(e){
           err.textContent = e?.message || "Failed";
@@ -215,7 +170,7 @@
       };
 
     }catch(e){
-      modal?.close?.();
+      closeAll();
       alert("Payment update failed: " + (e?.message || "unknown"));
     }
   }
