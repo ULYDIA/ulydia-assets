@@ -76,9 +76,10 @@
   }
 
 function decided(){
-  window.__ULYDIA_SPONSOR_DECIDED__ = true;   // ✅ AJOUT IMPORTANT
-  document.documentElement.classList.remove("ul-sponsor-loading");
+  window.__ULYDIA_SPONSOR_DECIDED__ = true; // ✅ essentiel
+  try { document.documentElement.classList.remove("ul-sponsor-loading"); } catch(e){}
 }
+
 
   // =========================================================
   // CONTEXT (metier / country)
@@ -154,40 +155,56 @@ function decided(){
   // =========================================================
   // APPLY UI
   // =========================================================
-  async function applySponsorDecision(info){
-    const blockSponsored = $(ID_SPONSORED_BLOCK);
-    const blockNotSponsored = $(ID_NOT_SPONSORED_BLOCK);
+async function applySponsorDecision(info){
+  const blockSponsored    = document.getElementById("block-sponsored");
+  const blockNotSponsored = document.getElementById("block-not-sponsored");
 
-    const sponsored = !!info?.sponsored;
-    window.SPONSORED_ACTIVE = sponsored;
+  const sponsored = !!info?.sponsored;
 
-    if (sponsored){
-      show(blockSponsored, true);
-      show(blockNotSponsored, false);
+  // helper show/hide
+  const show = (el, yes) => { if (!el) return; el.style.display = yes ? "" : "none"; };
 
-      const sponsor = info?.sponsor || {};
-      const link = String(sponsor.link || "").trim();
+  if (sponsored) {
+    // ✅ lien sponsor
+    const sponsor = info?.sponsor || {};
+    const link = String(sponsor.link || "").trim();
 
-      const logo1 = pickUrl(sponsor.logo_1);
-      const logo2 = pickUrl(sponsor.logo_2);
-
-      const { b1, b2 } = getBannerTargets();
-
-      if (logo1) setImgHard(b1, logo1);
-      if (logo2) setImgHard(b2, logo2);
-
-      if (link){
-        makeClickable(b1, link);
-        makeClickable(b2, link);
-      }
-
-    } else {
-      show(blockSponsored, false);
-      show(blockNotSponsored, true);
+    // ✅ swap propre: on cache non sponsor, on montre sponsor
+    if (blockSponsored) {
+      blockSponsored.style.opacity = "0";
+      blockSponsored.style.transition = "opacity 180ms ease";
     }
 
-    decided();
+    show(blockNotSponsored, false);
+    show(blockSponsored, true);
+
+    // applique images + liens (garde tes fonctions setImgHard/pickUrl existantes)
+    const l1 = String(sponsor.logo_1 || "").trim();
+    const l2 = String(sponsor.logo_2 || "").trim();
+
+    // ⚠️ adapte selectors si besoin (tu m’as montré que tes ids images varient)
+    const img1 = document.querySelector("#block-sponsored img#nonSponsorBanner01, #block-sponsored img[data-banner='1'], #block-sponsored img");
+    const img2 = document.querySelector("#block-sponsored img#nonSponsorBanner02, #block-sponsored img[data-banner='2'], #block-sponsored img");
+
+    if (l1 && img1) setImgHard(img1, l1);
+    if (l2 && img2) setImgHard(img2, l2);
+
+    if (link) setLinkOnSponsorAnchors(link); // ta fonction qui met href/target
+
+    // fade-in
+    requestAnimationFrame(() => {
+      if (blockSponsored) blockSponsored.style.opacity = "1";
+    });
+
+  } else {
+    // non sponsor
+    show(blockSponsored, false);
+    show(blockNotSponsored, true);
   }
+
+  decided(); // ✅ toujours
+}
+
 
   // =========================================================
   // BOOT
