@@ -19,6 +19,18 @@ if (!ROOT) {
 }
 
 
+const DEBUG = !!window.__METIER_PAGE_DEBUG__;
+function log(...a){ if(DEBUG) console.log("[metier-page]", ...a); }
+
+let ROOT = document.getElementById("ulydia-metier-root");
+if (!ROOT) {
+  ROOT = document.createElement("div");
+  ROOT.id = "ulydia-metier-root";
+  document.body.prepend(ROOT);
+  log("root auto-created");
+}
+
+
   // =========================================================
   // CONFIG
   // =========================================================
