@@ -91,6 +91,15 @@
     });
   }
 
+
+// ✅ Sticky verdict (pour les scripts chargés plus tard, ex: footer)
+window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored: !!isSponsored };
+
+// ✅ Important : si sponsor, set flag TOUT DE SUITE (avant preload images)
+if (isSponsored) window.SPONSORED_ACTIVE = true;
+
+
+
   function emitSponsorReady(sponsored, payload){
     try{
       window.dispatchEvent(new CustomEvent("ulydia:sponsor-ready", {
