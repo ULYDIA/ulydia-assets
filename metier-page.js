@@ -1,30 +1,20 @@
-/* metier-page.js — Ulydia (PROD CLEAN)
+/* metier-page.js — Ulydia (PROD CLEAN v2)
    - Fetch sponsor verdict from Worker (POST /sponsor-info)
-   - If sponsored: replace nonSponsorBanner01/02 with sponsor banners + bind click to sponsor link
-   - Sets SPONSORED_ACTIVE + emits uydia:sponsor-ready
-   - Guards against late overwrites for a short window
+   - If sponsored: replace nonSponsorBanner01/02 with sponsor banners
+   - Robust click handling (works with Webflow overlays/link blocks)
 */
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_PROD__) return;
-  window.__ULYDIA_METIER_PAGE_PROD__ = true;
+  if (window.__ULYDIA_METIER_PAGE_PROD_V2__) return;
+  window.__ULYDIA_METIER_PAGE_PROD_V2__ = true;
 
-  // =========================================================
-  // CONFIG
-  // =========================================================
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
   const ENDPOINT     = "/sponsor-info";
 
-  // Your existing Webflow banner IDs
-  const BANNER_1_ID  = "nonSponsorBanner01"; // landscape slot
-  const BANNER_2_ID  = "nonSponsorBanner02"; // square slot
+  const BANNER_1_ID  = "nonSponsorBanner01";
+  const BANNER_2_ID  = "nonSponsorBanner02";
+  const GUARD_MS     = 4000;
 
-  // Guard duration (ms) to prevent footer/global overwriting
-  const GUARD_MS = 4000;
-
-  // =========================================================
-  // HELPERS
-  // =========================================================
   function apiBase(){ return String(WORKER_URL || "").replace(/\/$/, ""); }
   function $(id){ return document.getElementById(id); }
 
@@ -56,7 +46,6 @@
   function setImgHard(el, url){
     if (!el || !url) return false;
 
-    // <img>
     if (el.tagName && el.tagName.toLowerCase() === "img") {
       el.removeAttribute("srcset");
       el.removeAttribute("sizes");
@@ -67,11 +56,9 @@
       return true;
     }
 
-    // container with img inside
     const img = el.querySelector && el.querySelector("img");
     if (img) return setImgHard(img, url);
 
-    // background fallback
     try{
       el.style.backgroundImage = `url("${url}")`;
       el.style.backgroundSize = "cover";
@@ -80,27 +67,6 @@
       return true;
     }catch(e){}
     return false;
-  }
-
-  function bindClickOpen(el, url){
-    if (!el || !url) return;
-    if (el.__ul_click_bound) return;
-    el.__ul_click_bound = true;
-
-    try { el.style.cursor = "pointer"; } catch(e){}
-
-    el.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      window.open(url, "_blank", "noopener,noreferrer");
-    }, { passive: false });
-
-    const a = el.closest && el.closest("a");
-    if (a){
-      a.setAttribute("href", url);
-      a.setAttribute("target", "_blank");
-      a.setAttribute("rel", "noopener noreferrer");
-    }
   }
 
   function emitSponsorReady(sponsored, payload){
@@ -114,10 +80,8 @@
   function guardReapply(el, expectedUrl, msTotal){
     if (!el || !expectedUrl) return;
     const start = Date.now();
-
-    const timer = setInterval(() => {
-      if (Date.now() - start > msTotal) { clearInterval(timer); return; }
-
+    const t = setInterval(() => {
+      if (Date.now() - start > msTotal) { clearInterval(t); return; }
       if (el.tagName && el.tagName.toLowerCase() === "img") {
         const cur = (el.getAttribute("src") || "").trim();
         if (cur !== expectedUrl) setImgHard(el, expectedUrl);
@@ -125,6 +89,90 @@
         setImgHard(el, expectedUrl);
       }
     }, 250);
+  }
+
+  function isClickableTag(el){
+    const tag = (el?.tagName || "").toLowerCase();
+    return tag === "a" || tag === "button";
+  }
+
+  function pickClickTarget(el){
+    if (!el) return null;
+
+    // Prefer closest <a>
+    const a = el.closest && el.closest("a");
+    if (a) return a;
+
+    // Otherwise climb parents to find a reasonable wrapper (Webflow link blocks/divs)
+    let cur = el;
+    for (let i = 0; i < 6 && cur; i++){
+      if (isClickableTag(cur)) return cur;
+      // Common Webflow wrappers: link-block, w-inline-block, etc.
+      const cls = (cur.className || "");
+      if (typeof cls === "string" && (cls.includes("w-inline-block") || cls.includes("w-button") || cls.includes("link"))) {
+        return cur;
+      }
+      cur = cur.parentElement;
+    }
+
+    // Fallback to the element itself
+    return el;
+  }
+
+  function bindSponsorClick(el, url){
+    if (!el || !url) return;
+
+    const target = pickClickTarget(el);
+    if (!target) return;
+
+    // Prevent double-binding
+    if (target.__ul_sponsor_click_bound) return;
+    target.__ul_sponsor_click_bound = true;
+
+    // Ensure clickable
+    try {
+      target.style.cursor = "pointer";
+      target.style.pointerEvents = "auto";
+    } catch(e){}
+
+    // If target is <a>, set href
+    if (target.tagName && target.tagName.toLowerCase() === "a") {
+      target.setAttribute("href", url);
+      target.setAttribute("target", "_blank");
+      target.setAttribute("rel", "noopener noreferrer");
+      return; // href is enough (less fragile)
+    }
+
+    // Otherwise attach handler
+    target.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.open(url, "_blank", "noopener,noreferrer");
+    }, { passive: false });
+  }
+
+  function installCaptureFallback(el1, el2, url){
+    if (!url) return;
+    // Capture phase handler to beat overlays that stop bubbling
+    if (document.__ul_sponsor_capture_bound) return;
+    document.__ul_sponsor_capture_bound = true;
+
+    const nodes = [el1, el2].filter(Boolean);
+    if (!nodes.length) return;
+
+    document.addEventListener("click", (e) => {
+      const t = e.target;
+      if (!t) return;
+      for (const n of nodes){
+        if (n === t || (n.contains && n.contains(t))) {
+          // Click happened inside banner area
+          e.preventDefault();
+          e.stopPropagation();
+          window.open(url, "_blank", "noopener,noreferrer");
+          return;
+        }
+      }
+    }, true); // ✅ capture
   }
 
   async function fetchSponsorInfo(){
@@ -148,17 +196,11 @@
     return data;
   }
 
-  // =========================================================
-  // BOOT
-  // =========================================================
   (async () => {
-    // marker for other scripts
     window.__ULYDIA_PAGE_SPONSOR_SCRIPT__ = true;
 
     const el1 = $(BANNER_1_ID);
     const el2 = $(BANNER_2_ID);
-
-    // If the template doesn't contain banners, don't do anything
     if (!el1 && !el2) return;
 
     const data = await fetchSponsorInfo();
@@ -184,8 +226,8 @@
     const sponsor = data.sponsor || {};
     const link = String(sponsor.link || "").trim();
 
-    const urlLandscape = String(sponsor.logo_2 || "").trim(); // banner1
-    const urlSquare    = String(sponsor.logo_1 || "").trim(); // banner2
+    const urlLandscape = String(sponsor.logo_2 || "").trim();
+    const urlSquare    = String(sponsor.logo_1 || "").trim();
 
     const target1 = urlLandscape || urlSquare;
     const target2 = urlSquare || urlLandscape;
@@ -194,13 +236,13 @@
     if (el2 && target2) setImgHard(el2, target2);
 
     if (link) {
-      if (el1) bindClickOpen(el1, link);
-      if (el2) bindClickOpen(el2, link);
+      if (el1) bindSponsorClick(el1, link);
+      if (el2) bindSponsorClick(el2, link);
+      installCaptureFallback(el1, el2, link);
     }
 
     emitSponsorReady(true, data);
 
-    // short guard against late overwrites (footer/global timeouts)
     if (el1 && target1) guardReapply(el1, target1, GUARD_MS);
     if (el2 && target2) guardReapply(el2, target2, GUARD_MS);
   })();
