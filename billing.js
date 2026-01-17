@@ -26,7 +26,7 @@
       headers: {
         "content-type": "application/json",
         // ✅ compat: certains workers checkent un header différent
-        "x-proxy-secret": proxySecret,
+        "x-proxy-secret": opts.proxySecret,
         "x-ulydia-proxy-secret": proxySecret,
       },
       body: JSON.stringify(payload || {}),
