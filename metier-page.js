@@ -1,6 +1,7 @@
+<script>
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V2__) return;
-  window.__ULYDIA_METIER_PAGE_V2__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V22__) return;
+  window.__ULYDIA_METIER_PAGE_V22__ = true;
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -11,17 +12,8 @@
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
 
-  // On essaye plusieurs endpoints au cas où tu ne sais plus lequel est “le bon”
-  const ENDPOINT_CANDIDATES = [
-    "/sponsor-info",
-    "/sponsor/info",
-    "/sponsorization/info",
-    "/sponsorship/info",
-    "/sponsorship/detail",
-    "/sponsorship/detail2",
-    "/api/sponsor-info",
-    "/api/sponsorship/detail",
-  ];
+  // ✅ Ton Worker sponsor-info est un POST JSON (d’après tes tests console)
+  const ENDPOINT = "/sponsor-info";
 
   // DOM ids
   const ID_SPONSORED_BLOCK     = "block-sponsored";
@@ -43,7 +35,6 @@
   function apiBase(){
     return String(WORKER_URL || "").replace(/\/$/, "");
   }
-
   function $(id){ return document.getElementById(id); }
 
   function show(el, yes){
@@ -56,31 +47,70 @@
   function pickUrl(v){
     if (!v) return "";
     if (typeof v === "string") return v.trim();
-    // airtable attachment array / object
     if (Array.isArray(v)) return (v[0]?.url || v[0]?.thumbnails?.large?.url || v[0]?.thumbnails?.full?.url || "").trim();
     if (typeof v === "object") return (v.url || v.thumbnails?.large?.url || v.thumbnails?.full?.url || "").trim();
     return "";
   }
 
-  function setImgHard(imgEl, url){
-    if (!imgEl || !url) return;
+  // ✅ Webflow-safe image set (srcset/sizes can override src)
+  function setImgHard(elOrId, url){
+    if (!url) return false;
+    const el = (typeof elOrId === "string") ? document.getElementById(elOrId) : elOrId;
+    if (!el) return false;
+
+    // If it's an img
+    if (el.tagName && el.tagName.toLowerCase() === "img") {
+      try{
+        el.removeAttribute("srcset");
+        el.removeAttribute("sizes");
+        el.setAttribute("src", url);
+        // Some Webflow setups keep srcset; keep it empty to prevent override
+        el.setAttribute("srcset", "");
+        // force repaint
+        el.style.opacity = "0.999";
+        requestAnimationFrame(() => { el.style.opacity = ""; });
+        return true;
+      }catch(e){
+        return false;
+      }
+    }
+
+    // If container contains img
+    const img = el.querySelector && el.querySelector("img");
+    if (img) return setImgHard(img, url);
+
+    // Fallback background-image
     try{
-      imgEl.removeAttribute("srcset");
-      imgEl.removeAttribute("sizes");
-      imgEl.setAttribute("src", url);
-      imgEl.setAttribute("srcset", url);
-      imgEl.style.visibility = "";
-      imgEl.style.opacity = "";
+      el.style.backgroundImage = `url("${url}")`;
+      el.style.backgroundSize = "cover";
+      el.style.backgroundPosition = "center";
+      return true;
+    }catch(e){}
+    return false;
+  }
+
+  function setLinkOnClosestA(node, url){
+    if (!node || !url) return;
+    const a = node.closest && node.closest("a");
+    if (!a) return;
+    try{
+      a.setAttribute("href", url);
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener noreferrer");
+      a.style.pointerEvents = "auto";
     }catch(e){}
   }
 
   function setLinkOnSponsorAnchors(url){
     if (!url) return;
+
+    // 1) Anchors marked for sponsor
     const nodes = [
       ...document.querySelectorAll('[data-role="sponsor-link"]'),
       ...document.querySelectorAll('[data-sponsor-link="true"]'),
-      ...document.querySelectorAll('a[data-action="sponsor"]'),
+      ...document.querySelectorAll('a[data-action="sponsor"]')
     ];
+
     nodes.forEach(a => {
       try{
         a.setAttribute("href", url);
@@ -89,16 +119,13 @@
         a.style.pointerEvents = "auto";
       }catch(e){}
     });
+
+    // 2) Also force link on the closest <a> around the logo images (most common)
+    const logo1 = $(ID_LOGO_1);
+    const logo2 = $(ID_LOGO_2);
+    setLinkOnClosestA(logo1, url);
+    setLinkOnClosestA(logo2, url);
   }
-
-
-// ✅ Sticky verdict (pour les scripts chargés plus tard, ex: footer)
-window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored: !!isSponsored };
-
-// ✅ Important : si sponsor, set flag TOUT DE SUITE (avant preload images)
-if (isSponsored) window.SPONSORED_ACTIVE = true;
-
-
 
   function emitSponsorReady(sponsored, payload){
     try{
@@ -117,22 +144,18 @@ if (isSponsored) window.SPONSORED_ACTIVE = true;
   // CONTEXT (metier / country / lang)
   // =========================================================
   function findMetierSlug(){
-    // 1) param ?metier=
     const fromQP = (qp("metier") || "").trim();
     if (fromQP) return fromQP;
 
-    // 2) élément #metier-slug
     const ms = $("metier-slug");
     if (ms && ms.textContent.trim()) return ms.textContent.trim();
 
-    // 3) premier élément qui a data-metier (comme sur ton screenshot)
     const any = document.querySelector("[data-metier]");
     if (any){
       const v = (any.getAttribute("data-metier") || "").trim();
       if (v) return v;
     }
 
-    // 4) fallback URL: dernier segment
     const parts = location.pathname.split("/").filter(Boolean);
     return parts[parts.length - 1] || "";
   }
@@ -156,29 +179,31 @@ if (isSponsored) window.SPONSORED_ACTIVE = true;
   }
 
   // =========================================================
-  // FETCH sponsor info (multi-route probing)
+  // FETCH sponsor info (POST JSON)
   // =========================================================
-  async function fetchJson(url){
-    const headers = { "accept": "application/json" };
+  async function postJson(path, payload){
+    const url = apiBase() + path;
+    const headers = {
+      "content-type": "application/json",
+      "accept": "application/json",
+    };
     if (PROXY_SECRET) headers["x-proxy-secret"] = PROXY_SECRET;
 
-    const res = await fetch(url, { method: "GET", headers, cache: "no-store" });
-    const ct = (res.headers.get("content-type") || "").toLowerCase();
-    const text = await res.text();
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload || {}),
+      cache: "no-store",
+    });
 
+    const text = await res.text().catch(() => "");
     let data = null;
-    if (ct.includes("application/json")) {
-      try { data = JSON.parse(text); } catch(e) {}
-    } else {
-      // certains workers renvoient json sans content-type correct
-      try { data = JSON.parse(text); } catch(e) {}
-    }
+    try { data = JSON.parse(text); } catch(e){}
 
     return { ok: res.ok, status: res.status, data, text };
   }
 
   function normalizeSponsorPayload(raw){
-    // Objectif: obtenir { sponsored, sponsor:{logo_1, logo_2, link} }
     const obj = raw || {};
     const sponsored =
       !!obj.sponsored ||
@@ -200,45 +225,18 @@ if (isSponsored) window.SPONSORED_ACTIVE = true;
       logo_1: pickUrl(sponsorObj.logo_1 || sponsorObj.logo1 || sponsorObj.square || obj.logo_1 || obj.logo1),
       logo_2: pickUrl(sponsorObj.logo_2 || sponsorObj.logo2 || sponsorObj.landscape || obj.logo_2 || obj.logo2),
       name:   String(sponsorObj.name || sponsorObj.company_name || obj.name || "").trim(),
+      status: String(sponsorObj.status || obj.status || "").trim(),
     };
 
     return { sponsored, sponsor, raw: obj };
   }
 
   async function getSponsorInfo(metier, country, lang){
-    const base = apiBase();
-    if (!base) return null;
+    const r = await postJson(ENDPOINT, { metier, country, lang });
+    log("POST", ENDPOINT, "=>", r.status, r.data || r.text);
 
-    // endpoints
-    const tries = ENDPOINT_CANDIDATES.map(p => {
-      const u = new URL(base + p);
-      u.searchParams.set("metier", metier);
-      u.searchParams.set("country", country);
-      u.searchParams.set("lang", lang);
-      return u.toString();
-    });
-
-    log("probing endpoints:", tries);
-
-    for (const url of tries){
-      try{
-        const r = await fetchJson(url);
-        log("probe:", url, r.status);
-
-        // si OK + json parse => on prend
-        if (r.ok && r.data && typeof r.data === "object") {
-          return normalizeSponsorPayload(r.data);
-        }
-
-        // parfois le Worker renvoie 200 mais json vide -> continue
-        if (r.ok && r.data == null) continue;
-
-        // si 404 -> continue
-      }catch(e){
-        // continue
-      }
-    }
-    return null;
+    if (!r.ok || !r.data || typeof r.data !== "object") return null;
+    return normalizeSponsorPayload(r.data);
   }
 
   // =========================================================
@@ -251,24 +249,33 @@ if (isSponsored) window.SPONSORED_ACTIVE = true;
     const logo2 = $(ID_LOGO_2);
 
     const sponsored = !!info?.sponsored;
-    window.SPONSORED_ACTIVE = sponsored;
+
+    // ✅ sticky verdict (for footer scripts / late listeners)
+    window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored };
+    if (sponsored) window.SPONSORED_ACTIVE = true;
+    else window.SPONSORED_ACTIVE = false;
 
     if (sponsored){
       show(blockSponsored, true);
       show(blockNotSponsored, false);
 
-      const link = info?.sponsor?.link || "";
-      const l1 = info?.sponsor?.logo_1 || "";
-      const l2 = info?.sponsor?.logo_2 || "";
+      const link = String(info?.sponsor?.link || "").trim();
+      const l1 = String(info?.sponsor?.logo_1 || "").trim(); // square
+      const l2 = String(info?.sponsor?.logo_2 || "").trim(); // landscape
 
+      log("apply sponsor assets", { l1, l2, link });
+
+      // Apply images HARD
       if (l1) setImgHard(logo1, l1);
       if (l2) setImgHard(logo2, l2);
 
+      // Ensure links
       if (link) setLinkOnSponsorAnchors(link);
+
     } else {
       show(blockSponsored, false);
       show(blockNotSponsored, true);
-      // Ici: on ne touche pas aux bannières non sponsor (ton script body s’en occupe)
+      // ne touche pas aux bannières non sponsor (gérées par ton script global)
     }
 
     emitSponsorReady(sponsored, info || null);
@@ -280,6 +287,8 @@ if (isSponsored) window.SPONSORED_ACTIVE = true;
   // =========================================================
   (async function boot(){
     try{
+      window.__ULYDIA_PAGE_SPONSOR_SCRIPT__ = true; // flag for global scripts
+
       const metier = findMetierSlug();
       const country = getCountry();
       const lang = getLang();
@@ -287,7 +296,8 @@ if (isSponsored) window.SPONSORED_ACTIVE = true;
       log("context:", { metier, country, lang });
 
       if (!metier){
-        // Pas de slug => on ne bloque pas
+        window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored: false };
+        window.SPONSORED_ACTIVE = false;
         emitSponsorReady(false, { error: "missing_metier" });
         decided();
         return;
@@ -296,8 +306,7 @@ if (isSponsored) window.SPONSORED_ACTIVE = true;
       const info = await getSponsorInfo(metier, country, lang);
 
       if (!info){
-        // Aucun endpoint trouvé => on ne casse rien
-        log("no sponsor info found -> default non sponsored");
+        log("no sponsor info -> default non sponsored");
         await applySponsorDecision({ sponsored: false, sponsor: {}, raw: null });
         return;
       }
@@ -306,9 +315,12 @@ if (isSponsored) window.SPONSORED_ACTIVE = true;
 
     }catch(e){
       console.warn("[metier-page] boot error", e);
+      window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored: false };
+      window.SPONSORED_ACTIVE = false;
       emitSponsorReady(false, { error: "boot_error" });
       decided();
     }
   })();
 
 })();
+</script>
