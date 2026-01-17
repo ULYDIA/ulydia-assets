@@ -8,6 +8,17 @@
   if (window.__ULYDIA_METIER_PAGE_V1__) return;
   window.__ULYDIA_METIER_PAGE_V1__ = true;
 
+
+const ROOT = document.getElementById('ulydia-metier-root');
+
+if (!ROOT) {
+  if (window.__METIER_PAGE_DEBUG__) {
+    console.warn('[metier-page] root not found, abort');
+  }
+  return;
+}
+
+
   // =========================================================
   // CONFIG
   // =========================================================
