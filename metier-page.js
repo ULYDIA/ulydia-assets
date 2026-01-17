@@ -1,7 +1,7 @@
 <script>
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V22__) return;
-  window.__ULYDIA_METIER_PAGE_V22__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V23__) return;
+  window.__ULYDIA_METIER_PAGE_V23__ = true;
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -11,20 +11,21 @@
   // =========================================================
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
+  const ENDPOINT     = "/sponsor-info"; // ✅ POST JSON
 
-  // ✅ Ton Worker sponsor-info est un POST JSON (d’après tes tests console)
-  const ENDPOINT = "/sponsor-info";
-
-  // DOM ids
+  // Blocks (exist on your page ✅)
   const ID_SPONSORED_BLOCK     = "block-sponsored";
   const ID_NOT_SPONSORED_BLOCK = "block-not-sponsored";
-  const ID_LOGO_1              = "sponsor-logo-1"; // square
-  const ID_LOGO_2              = "sponsor-logo-2"; // landscape
+
+  // Optional explicit IDs (if you add them later)
+  const FALLBACK_IDS_LANDSCAPE = ["sponsor-logo-2", "sponsorBannerLandscape", "sponsor-banner-landscape", "sponsor_landscape"];
+  const FALLBACK_IDS_SQUARE    = ["sponsor-logo-1", "sponsorBannerSquare", "sponsor-banner-square", "sponsor_square"];
 
   // =========================================================
   // HELPERS
   // =========================================================
   const qp = (name) => new URLSearchParams(location.search).get(name);
+  const $ = (id) => document.getElementById(id);
 
   function normIso(v){
     return String(v || "").trim().toUpperCase().replace(/[^A-Z]/g, "");
@@ -35,7 +36,6 @@
   function apiBase(){
     return String(WORKER_URL || "").replace(/\/$/, "");
   }
-  function $(id){ return document.getElementById(id); }
 
   function show(el, yes){
     if (!el) return;
@@ -52,34 +52,26 @@
     return "";
   }
 
-  // ✅ Webflow-safe image set (srcset/sizes can override src)
   function setImgHard(elOrId, url){
     if (!url) return false;
     const el = (typeof elOrId === "string") ? document.getElementById(elOrId) : elOrId;
     if (!el) return false;
 
-    // If it's an img
     if (el.tagName && el.tagName.toLowerCase() === "img") {
       try{
         el.removeAttribute("srcset");
         el.removeAttribute("sizes");
         el.setAttribute("src", url);
-        // Some Webflow setups keep srcset; keep it empty to prevent override
         el.setAttribute("srcset", "");
-        // force repaint
         el.style.opacity = "0.999";
         requestAnimationFrame(() => { el.style.opacity = ""; });
         return true;
-      }catch(e){
-        return false;
-      }
+      }catch(e){ return false; }
     }
 
-    // If container contains img
     const img = el.querySelector && el.querySelector("img");
     if (img) return setImgHard(img, url);
 
-    // Fallback background-image
     try{
       el.style.backgroundImage = `url("${url}")`;
       el.style.backgroundSize = "cover";
@@ -104,7 +96,6 @@
   function setLinkOnSponsorAnchors(url){
     if (!url) return;
 
-    // 1) Anchors marked for sponsor
     const nodes = [
       ...document.querySelectorAll('[data-role="sponsor-link"]'),
       ...document.querySelectorAll('[data-sponsor-link="true"]'),
@@ -120,11 +111,12 @@
       }catch(e){}
     });
 
-    // 2) Also force link on the closest <a> around the logo images (most common)
-    const logo1 = $(ID_LOGO_1);
-    const logo2 = $(ID_LOGO_2);
-    setLinkOnClosestA(logo1, url);
-    setLinkOnClosestA(logo2, url);
+    // Also force on any anchors wrapping images inside block-sponsored
+    const block = $(ID_SPONSORED_BLOCK);
+    if (block) {
+      const imgs = Array.from(block.querySelectorAll("img"));
+      imgs.forEach(img => setLinkOnClosestA(img, url));
+    }
   }
 
   function emitSponsorReady(sponsored, payload){
@@ -141,7 +133,7 @@
   }
 
   // =========================================================
-  // CONTEXT (metier / country / lang)
+  // CONTEXT
   // =========================================================
   function findMetierSlug(){
     const fromQP = (qp("metier") || "").trim();
@@ -161,25 +153,15 @@
   }
 
   function getCountry(){
-    return (
-      normIso(window.VISITOR_COUNTRY) ||
-      normIso(qp("country")) ||
-      normIso($("country-iso")?.textContent) ||
-      "US"
-    );
+    return normIso(window.VISITOR_COUNTRY) || normIso(qp("country")) || "US";
   }
 
   function getLang(){
-    const l =
-      normLang(window.VISITOR_LANG) ||
-      normLang(qp("lang")) ||
-      normLang($("country-lang")?.textContent) ||
-      "en";
-    return l || "en";
+    return normLang(window.VISITOR_LANG) || normLang(qp("lang")) || "en";
   }
 
   // =========================================================
-  // FETCH sponsor info (POST JSON)
+  // FETCH (POST JSON)
   // =========================================================
   async function postJson(path, payload){
     const url = apiBase() + path;
@@ -205,38 +187,71 @@
 
   function normalizeSponsorPayload(raw){
     const obj = raw || {};
-    const sponsored =
-      !!obj.sponsored ||
-      !!obj.isSponsored ||
-      !!obj.active ||
-      !!obj?.data?.sponsored ||
-      !!obj?.result?.sponsored;
+    const sponsored = !!obj.sponsored;
+    const sponsorObj = obj.sponsor || {};
 
-    const sponsorObj =
-      obj.sponsor ||
-      obj.company ||
-      obj.brand ||
-      obj?.data?.sponsor ||
-      obj?.result?.sponsor ||
-      {};
-
-    const sponsor = {
-      link:   String(sponsorObj.link || sponsorObj.url || obj.link || "").trim(),
-      logo_1: pickUrl(sponsorObj.logo_1 || sponsorObj.logo1 || sponsorObj.square || obj.logo_1 || obj.logo1),
-      logo_2: pickUrl(sponsorObj.logo_2 || sponsorObj.logo2 || sponsorObj.landscape || obj.logo_2 || obj.logo2),
-      name:   String(sponsorObj.name || sponsorObj.company_name || obj.name || "").trim(),
-      status: String(sponsorObj.status || obj.status || "").trim(),
+    return {
+      sponsored,
+      sponsor: {
+        link:   String(sponsorObj.link || "").trim(),
+        logo_1: pickUrl(sponsorObj.logo_1),
+        logo_2: pickUrl(sponsorObj.logo_2),
+        name:   String(sponsorObj.name || "").trim(),
+        status: String(sponsorObj.status || "").trim(),
+      },
+      raw: obj
     };
-
-    return { sponsored, sponsor, raw: obj };
   }
 
   async function getSponsorInfo(metier, country, lang){
     const r = await postJson(ENDPOINT, { metier, country, lang });
     log("POST", ENDPOINT, "=>", r.status, r.data || r.text);
-
     if (!r.ok || !r.data || typeof r.data !== "object") return null;
     return normalizeSponsorPayload(r.data);
+  }
+
+  // =========================================================
+  // FIND IMGS INSIDE #block-sponsored (since IDs missing)
+  // =========================================================
+  function findImgByIds(ids){
+    for (const id of ids){
+      const el = document.getElementById(id);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  function pickLandscapeAndSquareImgs(block){
+    const imgs = Array.from(block.querySelectorAll("img")).filter(img => {
+      // ignore 1x1 icons
+      const w = img.naturalWidth || img.width || 0;
+      const h = img.naturalHeight || img.height || 0;
+      return (w + h) > 20;
+    });
+
+    // If we can detect shapes
+    let landscape = null;
+    let square = null;
+
+    // Prefer images already having a "wide" aspect or likely banner
+    for (const img of imgs){
+      const w = img.naturalWidth || img.width || 0;
+      const h = img.naturalHeight || img.height || 0;
+      if (!landscape && w && h && (w / h) >= 2.2) landscape = img;
+    }
+    // Prefer square-ish for logo_1
+    for (const img of imgs){
+      const w = img.naturalWidth || img.width || 0;
+      const h = img.naturalHeight || img.height || 0;
+      const r = (w && h) ? (w / h) : 0;
+      if (!square && r && r > 0.8 && r < 1.25) square = img;
+    }
+
+    // Fallback: take first two images if not detected
+    if (!landscape && imgs[0]) landscape = imgs[0];
+    if (!square && imgs[1]) square = imgs[1];
+
+    return { landscape, square, imgs };
   }
 
   // =========================================================
@@ -245,15 +260,12 @@
   async function applySponsorDecision(info){
     const blockSponsored = $(ID_SPONSORED_BLOCK);
     const blockNotSponsored = $(ID_NOT_SPONSORED_BLOCK);
-    const logo1 = $(ID_LOGO_1);
-    const logo2 = $(ID_LOGO_2);
 
     const sponsored = !!info?.sponsored;
 
-    // ✅ sticky verdict (for footer scripts / late listeners)
+    // ✅ sticky verdict
     window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored };
-    if (sponsored) window.SPONSORED_ACTIVE = true;
-    else window.SPONSORED_ACTIVE = false;
+    window.SPONSORED_ACTIVE = sponsored;
 
     if (sponsored){
       show(blockSponsored, true);
@@ -265,17 +277,39 @@
 
       log("apply sponsor assets", { l1, l2, link });
 
-      // Apply images HARD
-      if (l1) setImgHard(logo1, l1);
-      if (l2) setImgHard(logo2, l2);
+      // 1) Try explicit IDs if you add them later
+      const imgLandscape = findImgByIds(FALLBACK_IDS_LANDSCAPE);
+      const imgSquare    = findImgByIds(FALLBACK_IDS_SQUARE);
 
-      // Ensure links
+      let okLand = false;
+      let okSq   = false;
+
+      if (imgLandscape && l2) okLand = setImgHard(imgLandscape, l2);
+      if (imgSquare && l1)    okSq   = setImgHard(imgSquare, l1);
+
+      // 2) If IDs not present, auto-pick inside block-sponsored
+      if ((!okLand || !okSq) && blockSponsored) {
+        const picked = pickLandscapeAndSquareImgs(blockSponsored);
+        log("picked imgs", picked);
+
+        if (!okLand && picked.landscape && l2) okLand = setImgHard(picked.landscape, l2);
+        if (!okSq && picked.square && l1)      okSq   = setImgHard(picked.square, l1);
+
+        // Make sure those imgs are clickable too
+        if (link) {
+          if (picked.landscape) setLinkOnClosestA(picked.landscape, link);
+          if (picked.square) setLinkOnClosestA(picked.square, link);
+        }
+      }
+
       if (link) setLinkOnSponsorAnchors(link);
+
+      log("apply result", { okLand, okSq });
 
     } else {
       show(blockSponsored, false);
       show(blockNotSponsored, true);
-      // ne touche pas aux bannières non sponsor (gérées par ton script global)
+      // non-sponsor banners handled by your global/body script
     }
 
     emitSponsorReady(sponsored, info || null);
@@ -287,7 +321,7 @@
   // =========================================================
   (async function boot(){
     try{
-      window.__ULYDIA_PAGE_SPONSOR_SCRIPT__ = true; // flag for global scripts
+      window.__ULYDIA_PAGE_SPONSOR_SCRIPT__ = true;
 
       const metier = findMetierSlug();
       const country = getCountry();
