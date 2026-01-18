@@ -72,26 +72,40 @@ async function readCountryRowByDataRole(root, iso){
   const items = Array.from(root.querySelectorAll(".w-dyn-item, [role='listitem'], .w-dyn-items > *"));
 
   for(const it of items){
-    // ✅ ISO
-    const isoEl = findRoleElLoose(it, "iso"); // tolère iso / ISO / iso-code etc si tu changes un jour
-    const itemIso = (isoEl?.textContent || "").trim().toUpperCase();
+
+    // ✅ 1) ISO via data-iso sur le .w-dyn-item (confirmé par ton HTML)
+    const itemIso = String(it.getAttribute("data-iso") || "").trim().toUpperCase();
     if(itemIso !== key) continue;
 
-    // ✅ IMAGES
-    const wideEl   = findRoleElLoose(it, "img1");
-    const squareEl = findRoleElLoose(it, "img2");
+    // ✅ 2) Images: ne PLUS dépendre de data-role (il n'existe pas)
+    // Essaye d'abord des classes stables (si tu les as dans Webflow)
+    let wideEl   = it.querySelector(".banner-img-1 img, img.banner-img-1, .banner-img-1");
+    let squareEl = it.querySelector(".banner-img-2 img, img.banner-img-2, .banner-img-2");
 
-    // try immediate, then wait
+    // Fallback: si pas de classes, prend les 2 premières images de l'item
+    if(!wideEl || !squareEl){
+      const imgs = Array.from(it.querySelectorAll("img"));
+      if(!wideEl) wideEl = imgs[0] || null;
+      if(!squareEl) squareEl = imgs[1] || null;
+    }
+
+    // try immediate, then wait (lazy)
     let wide = getImgSrc(wideEl);
     let square = getImgSrc(squareEl);
 
     if(!wide) wide = await waitForSrc(wideEl, 2500);
     if(!square) square = await waitForSrc(squareEl, 2500);
 
-    return { iso: key, wide, square };
+    // ✅ Bonus: texte/cta disponibles sur data-banner-text / data-banner-cta
+    const bannerText = String(it.getAttribute("data-banner-text") || "").trim();
+    const bannerCta  = String(it.getAttribute("data-banner-cta") || "").trim();
+
+    return { iso: key, wide, square, bannerText, bannerCta };
   }
+
   return null;
 }
+
 
   function pickUrl(v){ if(!v) return ""; if(typeof v==="string") return safeUrl(v); if(typeof v==="object") return safeUrl(v.url||v.value||""); return ""; }
   function normalizeLang(l){ const s=String(l||"").trim().toLowerCase(); return (s ? (s.split("-")[0]||CFG.DEFAULT_LANG) : CFG.DEFAULT_LANG); }
