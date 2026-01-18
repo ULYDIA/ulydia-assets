@@ -170,17 +170,24 @@ html.ul-metier-dark, html.ul-metier-dark body{
   // ---- Parse countriesData (your structure)
 function extractImgUrl(el){
   if(!el) return "";
-  // Case 1: <img>
-  const imgSrc = el.tagName === "IMG"
-    ? (el.currentSrc || el.getAttribute("src") || "")
-    : (el.querySelector("img")?.currentSrc || el.querySelector("img")?.getAttribute("src") || "");
-  if (imgSrc) return safeUrl(imgSrc);
 
-  // Case 2: background-image: url("...")
+  // CASE 1: el IS the <img>
+  if(el.tagName === "IMG"){
+    return el.currentSrc || el.getAttribute("src") || "";
+  }
+
+  // CASE 2: el contains an <img>
+  const img = el.querySelector("img");
+  if(img){
+    return img.currentSrc || img.getAttribute("src") || "";
+  }
+
+  // CASE 3: background-image fallback
   const bg = getComputedStyle(el).backgroundImage || "";
   const m = bg.match(/url\(["']?(.*?)["']?\)/i);
-  return m && m[1] ? safeUrl(m[1]) : "";
+  return m ? m[1] : "";
 }
+
 
 function readCountryRow(iso){
   const root = document.getElementById("countriesData");
@@ -196,12 +203,11 @@ function readCountryRow(iso){
     const itemIso = (it.querySelector(".iso-code")?.textContent || "").trim().toUpperCase();
     if(itemIso !== key) continue;
 
-    const wideEl = it.querySelector(".banner-img-1");
-    const squareEl = it.querySelector(".banner-img-2");
+const wideEl   = it.querySelector('[data-role="img1"]');
+const squareEl= it.querySelector('[data-role="img2"]');
 
-    const wide = extractImgUrl(wideEl);
-    const square = extractImgUrl(squareEl);
-
+const wide   = extractImgUrl(wideEl);
+const square = extractImgUrl(squareEl);
     return { iso: key, wide, square };
   }
   return null;
