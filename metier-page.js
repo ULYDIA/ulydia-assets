@@ -348,23 +348,76 @@
   // =========================================================
   // House banners (override via body attrs)
   // =========================================================
-  function getHouseBannerUrl(kind, lang){
-    const L=normalizeLang(lang);
+function readCountryBannersFromCMS() {
+  const root = document.getElementById("countriesData");
+  if (!root) return null;
 
-    const byBody=document.body?.getAttribute(`data-ul-house-${kind}-${L}`) || "";
-    const byHtml=document.documentElement?.getAttribute(`data-ul-house-${kind}-${L}`) || "";
-    if(byBody) return safeUrl(byBody);
-    if(byHtml) return safeUrl(byHtml);
+  const items = Array.from(root.querySelectorAll("[data-ul-country-item], .w-dyn-item, .w-dyn-items > *"));
+  if (!items.length) return null;
 
-    const pack=CFG.HOUSE_BANNERS[L] || CFG.HOUSE_BANNERS.en;
-    return safeUrl(pack?.[kind] || "");
+  const out = [];
+  for (const it of items) {
+    const isoEl = it.querySelector('[data-ul-country="iso"]');
+    const iso = (isoEl?.textContent || "").trim().toUpperCase();
+    if (!iso) continue;
+
+    const wideImg = it.querySelector('[data-ul-country="banner_wide"]');
+    const sqImg   = it.querySelector('[data-ul-country="banner_square"]');
+
+    const wide = safeUrl(wideImg?.getAttribute("src") || "");
+    const square = safeUrl(sqImg?.getAttribute("src") || "");
+
+    const langEl = it.querySelector('[data-ul-country="lang"]');
+    const lang = (langEl?.textContent || "").trim().toLowerCase();
+
+    out.push({ iso, wide, square, lang });
   }
+  return out.length ? out : null;
+}
 
-  function getHouseLink(lang){
-    const L=normalizeLang(lang);
-    const pack=CFG.HOUSE_BANNERS[L] || CFG.HOUSE_BANNERS.en;
-    return safeUrl(pack?.link || "/sponsorship");
-  }
+function pickCountryBanner(countryISO, kind /* "wide"|"square" */) {
+  const list = readCountryBannersFromCMS();
+  if (!list) return "";
+
+  const iso = String(countryISO || "").trim().toUpperCase();
+  const row = list.find(x => x.iso === iso);
+  if (!row) return "";
+
+  return kind === "wide" ? (row.wide || "") : (row.square || "");
+}
+
+function pickFinalLangFromCountry(countryISO) {
+  const list = readCountryBannersFromCMS();
+  if (!list) return "";
+  const iso = String(countryISO || "").trim().toUpperCase();
+  const row = list.find(x => x.iso === iso);
+  return row?.lang ? normalizeLang(row.lang) : "";
+}
+
+// ✅ Remplace tes fonctions existantes :
+function getHouseBannerUrl(kind, lang, countryISO) {
+  // 1) priorité au Pays (par ISO)
+  const byCountry = pickCountryBanner(countryISO, kind);
+  if (byCountry) return byCountry;
+
+  // 2) fallback legacy: body attrs (si tu en as)
+  const L = normalizeLang(lang);
+  const byBody = document.body?.getAttribute(`data-ul-house-${kind}-${L}`) || "";
+  const byHtml  = document.documentElement?.getAttribute(`data-ul-house-${kind}-${L}`) || "";
+  if (byBody) return safeUrl(byBody);
+  if (byHtml) return safeUrl(byHtml);
+
+  // 3) fallback ultime: CFG.HOUSE_BANNERS
+  const pack = CFG.HOUSE_BANNERS[L] || CFG.HOUSE_BANNERS.en;
+  return safeUrl(pack?.[kind] || "");
+}
+
+function getHouseLink(lang){
+  const L = normalizeLang(lang);
+  const pack = CFG.HOUSE_BANNERS[L] || CFG.HOUSE_BANNERS.en;
+  return safeUrl(pack?.link || "/sponsorship");
+}
+
 
   // =========================================================
   // Render HERO only
@@ -572,8 +625,14 @@ autoHideLegacyHero();
     let wideUrl = "", squareUrl = "", link = "";
 
     if(sponsored){
-      wideUrl = safeUrl((sponsor?.logo_2 || sponsor?.logo_wide || "").url || sponsor?.logo_2 || sponsor?.logo_wide || "");
-      squareUrl = safeUrl((sponsor?.logo_1 || sponsor?.logo_square || "").url || sponsor?.logo_1 || sponsor?.logo_square || "");
+    // si tu veux que la "langue finale" vienne aussi du Pays:
+    const langFromCountry = pickFinalLangFromCountry(country);
+    const effectiveLang = langFromCountry || finalLang;
+
+    wideUrl = getHouseBannerUrl("wide", effectiveLang, country);
+    squareUrl = getHouseBannerUrl("square", effectiveLang, country);
+    link = getHouseLink(effectiveLang);
+
       link = sponsorLink;
       await Promise.all([preloadImage(wideUrl), preloadImage(squareUrl)]);
     }else{
