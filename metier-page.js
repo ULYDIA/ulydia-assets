@@ -17,7 +17,7 @@
 
 (() => {
   // ✅ version visible dans la console
-  window.__METIER_PAGE_VERSION__ = "v4.3";
+  window.__METIER_PAGE_VERSION__ = "v4.5";
 
   if (window.__ULYDIA_METIER_PAGE_V4__) return;
   window.__ULYDIA_METIER_PAGE_V4__ = true;
@@ -143,15 +143,30 @@ function getCountryRowByISO(iso){
   const container = document.getElementById("countriesData");
   if (!container) return null;
   const target = String(iso || "").trim().toUpperCase();
+  if (!target) return null;
 
-  // Webflow dynamic list items are usually .w-dyn-item
+  // 1) Fast path: locate .iso-code nodes, then climb to their dyn item
+  const isoNodes = Array.from(container.querySelectorAll(".iso-code, [data-iso-code], [data-iso]"));
+  for (const n of isoNodes){
+    const t = (n.textContent || n.getAttribute("data-iso") || "").trim().toUpperCase();
+    if (t === target){
+      const item = n.closest(".w-dyn-item, .country-row, [data-country-row]");
+      return item || n.parentElement || null;
+    }
+  }
+
+  // 2) Fallback: iterate rows and try to read ISO from common places
   let rows = Array.from(container.querySelectorAll(".w-dyn-item, .country-row, [data-country-row]"));
   if (!rows.length) rows = Array.from(container.children || []);
 
   for (const row of rows) {
-    const isoEl = row.querySelector?.(".iso-code") || row.querySelector?.("[data-iso-code]") || null;
-    const rowISO = isoEl?.textContent?.trim()?.toUpperCase?.() || "";
+    const isoEl = row.querySelector?.(".iso-code") || row.querySelector?.("[data-iso-code]") || row.querySelector?.("[data-iso]") || null;
+    const rowISO = (isoEl?.textContent || isoEl?.getAttribute?.("data-iso") || "").trim().toUpperCase();
     if (rowISO === target) return row;
+
+    // last resort: look for an exact ISO token in the row text
+    const txt = (row.textContent || "").toUpperCase();
+    if (txt.split(/\s+/).includes(target)) return row;
   }
   return null;
 }
@@ -161,8 +176,9 @@ function getCountryBanner(iso, kind){
   if (!row) return "";
 
   // Your structure: banner-img-1 / banner-img-2 inside the country row
-  const n1 = row.querySelector?.(".banner-img-1") || row.querySelector?.("img.banner-img-1") || null;
-  const n2 = row.querySelector?.(".banner-img-2") || row.querySelector?.("img.banner-img-2") || null;
+  // banner-img-1 = wide, banner-img-2 = square
+  const n1 = row.querySelector?.("img.banner-img-1") || row.querySelector?.(".banner-img-1 img") || row.querySelector?.(".banner-img-1") || null;
+  const n2 = row.querySelector?.("img.banner-img-2") || row.querySelector?.(".banner-img-2 img") || row.querySelector?.(".banner-img-2") || null;
 
   if (kind === "wide")   return _ul_extractImgUrl(n1);
   if (kind === "square") return _ul_extractImgUrl(n2);
@@ -579,15 +595,8 @@ try {
   async function fetchMetierData({ slug, country, lang }) {
     const payload = { metier_slug: slug, metier: slug, country, lang, iso: country };
 
-    // 1) Optional endpoint
-    try {
-      const j = await postWorker("/metier-page", payload);
-      if (j && typeof j === "object") return { mode: "metier-page", data: j };
-    } catch (e) {
-      log("metier-page failed:", e?.message || e);
-    }
+    // 1) Existing endpoint (source of truth)
 
-    // 2) Existing endpoint
     try {
       const j = await postWorker("/sponsor-info", payload);
       if (j && typeof j === "object") return { mode: "sponsor-info", data: j };
@@ -1296,16 +1305,7 @@ async function resolveBanners(meta, finalLang, countryISO) {
     log("ready", { mode: res.mode, sponsored: !!model.meta.sponsored });
   }
 
-function boot(){
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      setTimeout(() => {
-        main().catch((e) => console.error("[metier-page] fatal", e));
-      }, 0);
-    });
+  main().catch((e) => {
+    console.error("[metier-page] fatal", e);
   });
-}
-boot();
-
-
 })();
