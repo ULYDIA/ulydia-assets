@@ -16,9 +16,11 @@
  */
 
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V34__) return;
-  window.__ULYDIA_METIER_PAGE_V34__ = true;
+  // ✅ version visible dans la console
+  window.__METIER_PAGE_VERSION__ = "v4.1";
 
+  if (window.__ULYDIA_METIER_PAGE_V4__) return;
+  window.__ULYDIA_METIER_PAGE_V4__ = true;
   // =========================================================
   // 0) CONFIG
   // =========================================================
