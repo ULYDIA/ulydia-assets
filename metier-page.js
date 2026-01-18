@@ -118,36 +118,44 @@ html.ul-metier-dark, html.ul-metier-dark body{
   }
 
   // ---- Parse countriesData (your structure)
-  function readCountryRow(iso){
-    const root = document.getElementById(CFG.COUNTRIES_DATA_ID);
-    if(!root) return null;
+function extractImgUrl(el){
+  if(!el) return "";
+  // Case 1: <img>
+  const imgSrc = el.tagName === "IMG"
+    ? (el.currentSrc || el.getAttribute("src") || "")
+    : (el.querySelector("img")?.currentSrc || el.querySelector("img")?.getAttribute("src") || "");
+  if (imgSrc) return safeUrl(imgSrc);
 
-    const items = Array.from(root.querySelectorAll(".w-dyn-item, .w-dyn-items > *"));
-    if(!items.length) return null;
+  // Case 2: background-image: url("...")
+  const bg = getComputedStyle(el).backgroundImage || "";
+  const m = bg.match(/url\(["']?(.*?)["']?\)/i);
+  return m && m[1] ? safeUrl(m[1]) : "";
+}
 
-    const key = String(iso||"").trim().toUpperCase();
+function readCountryRow(iso){
+  const root = document.getElementById("countriesData");
+  if(!root) return null;
 
-    for(const it of items){
-      const itemIso = (it.querySelector(".iso-code")?.textContent || "").trim().toUpperCase();
-      if(itemIso !== key) continue;
+  // Webflow items can be w-dyn-item OR other nodes; safest is: find by iso-code text
+  const key = String(iso||"").trim().toUpperCase();
 
-      // banner-img-1 and banner-img-2 can be <img> or wrappers
-      const wideEl = it.querySelector(".banner-img-1");
-      const squareEl = it.querySelector(".banner-img-2");
+  const candidates = Array.from(root.querySelectorAll(".country-row, .w-dyn-item, [role='listitem'], .w-dyn-items > *"));
+  const pool = candidates.length ? candidates : Array.from(root.children);
 
-      const wide =
-        safeUrl(wideEl?.getAttribute?.("src") || "") ||
-        safeUrl(it.querySelector(".banner-img-1 img")?.getAttribute("src") || "");
+  for(const it of pool){
+    const itemIso = (it.querySelector(".iso-code")?.textContent || "").trim().toUpperCase();
+    if(itemIso !== key) continue;
 
-      const square =
-        safeUrl(squareEl?.getAttribute?.("src") || "") ||
-        safeUrl(it.querySelector(".banner-img-2 img")?.getAttribute("src") || "");
+    const wideEl = it.querySelector(".banner-img-1");
+    const squareEl = it.querySelector(".banner-img-2");
 
-      return { iso: key, wide, square };
-    }
+    const wide = extractImgUrl(wideEl);
+    const square = extractImgUrl(squareEl);
 
-    return null;
+    return { iso: key, wide, square };
   }
+  return null;
+}
 
   // expose debug helper
   window.getCountryBanner = (iso, kind) => {
