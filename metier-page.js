@@ -1,8 +1,7 @@
 (() => {
   if (window.__ULYDIA_METIER_PAGE__) return;
   window.__ULYDIA_METIER_PAGE__ = true;
-
-  window.__METIER_PAGE_VERSION__ = "v4.7";
+  window.__METIER_PAGE_VERSION__ = "v4.8";
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -26,26 +25,55 @@
   function getFinalLang(){ return normalizeLang(qp("lang") || document.body?.getAttribute("data-lang") || document.documentElement?.lang || CFG.DEFAULT_LANG); }
   function slugFromPath(){ const p=location.pathname.replace(/\/+$/,""); const parts=p.split("/").filter(Boolean); const idx=parts.findIndex(x=>x===CFG.JOB_SEGMENT); if(idx>=0 && parts[idx+1]) return parts[idx+1]; return parts[parts.length-1] || ""; }
 
-  // ---------- CSS (short, relies on v4.6 look) ----------
-  const styleId="ul_metier_css_v47";
-  if(!document.getElementById(styleId)){
+  // ---- CSS (keeps dashboard dark look; you can replace by your full CSS)
+  const cssId="ul_metier_css_v48";
+  if(!document.getElementById(cssId)){
     const s=document.createElement("style");
-    s.id=styleId;
+    s.id=cssId;
     s.textContent=`
-html.ul-metier-dark, html.ul-metier-dark body{ background:#0b1020 !important; }
+html.ul-metier-dark, html.ul-metier-dark body{
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(100,108,253,0.22), transparent 55%),
+              radial-gradient(900px 500px at 95% 10%, rgba(255,255,255,0.06), transparent 60%),
+              linear-gradient(180deg, #0b1020, #070b16) !important;
+}
 #ulydia-metier-root{ color:#fff; font-family:Montserrat,system-ui,-apple-system,Segoe UI,Roboto,Arial; }
+.ul-wrap{ max-width:1120px; margin:0 auto; padding:22px 14px 26px; }
+.ul-hero{ display:grid; grid-template-columns:1.55fr 1fr; gap:16px; align-items:stretch; }
+@media(max-width:960px){ .ul-hero{ grid-template-columns:1fr; } }
+.ul-card{ background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.10); border-radius:22px; box-shadow:0 16px 50px rgba(0,0,0,.35); overflow:hidden; backdrop-filter: blur(10px); }
+.ul-card-pad{ padding:18px; }
+.ul-title{ font-size:34px; font-weight:850; letter-spacing:-.02em; margin:0 0 10px; line-height:1.12; }
+.ul-sub{ color:rgba(255,255,255,.70); font-size:14.5px; line-height:1.65; margin:0 0 14px; }
+.ul-meta{ display:flex; flex-wrap:wrap; gap:10px; color:rgba(255,255,255,.70); font-size:13px; font-weight:750; }
+.ul-pill{ padding:8px 10px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.04); border-radius:999px; }
+.ul-banners{ display:grid; grid-template-columns:1fr; gap:16px; }
+.ul-banner{ position:relative; border-radius:22px; overflow:hidden; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.03); display:block; }
+.ul-banner img{ width:100%; display:block; object-fit:cover; }
+.ul-banner-wide{ aspect-ratio:16/5; }
+.ul-banner-square{ aspect-ratio:1/1; }
 `;
     document.head.appendChild(s);
   }
   document.documentElement.classList.add("ul-metier-dark");
 
-  // ---------- shell mode keep countriesData ----------
+  // ---- Root
+  function ensureRoot(){
+    let root=document.getElementById("ulydia-metier-root");
+    if(!root){
+      root=document.createElement("div");
+      root.id="ulydia-metier-root";
+      document.body.prepend(root);
+    }
+    return root;
+  }
+
+  // ---- Shell mode: do not hide countriesData / cms payload
   function applyShellMode(){
     if(!CFG.SHELL_MODE) return;
 
-    const root=document.getElementById("ulydia-metier-root");
-    const countriesData=document.getElementById(CFG.COUNTRIES_DATA_ID);
-    const cmsPayload=document.getElementById(CFG.CMS_PAYLOAD_ID);
+    const root = document.getElementById("ulydia-metier-root");
+    const countriesData = document.getElementById(CFG.COUNTRIES_DATA_ID);
+    const cmsPayload = document.getElementById(CFG.CMS_PAYLOAD_ID);
 
     const keep = new Set();
     if(root) keep.add(root);
@@ -65,113 +93,101 @@ html.ul-metier-dark, html.ul-metier-dark body{ background:#0b1020 !important; }
     });
   }
 
-  // ---------- countriesData parse (supports 2 patterns) ----------
-  function readCountryBannersFromCMS(){
+  // ---- Wait for countriesData to be ready (because it's at end of page)
+  async function waitForCountriesData({ timeoutMs = 8000 } = {}){
+    const start = Date.now();
+    while(Date.now() - start < timeoutMs){
+      const root = document.getElementById(CFG.COUNTRIES_DATA_ID);
+      if(root){
+        const items = root.querySelectorAll(".w-dyn-item, .w-dyn-items > *");
+        const imgs = root.querySelectorAll("img");
+        if(items.length > 0 && imgs.length > 0) return true;
+      }
+      await new Promise(r => setTimeout(r, 80));
+    }
+    return false;
+  }
+
+  // ---- Parse countriesData (your structure)
+  function readCountryRow(iso){
     const root = document.getElementById(CFG.COUNTRIES_DATA_ID);
     if(!root) return null;
 
-    let items = Array.from(root.querySelectorAll(".w-dyn-item, .w-dyn-items > *"));
-    if(!items.length) items = Array.from(root.children || []);
+    const items = Array.from(root.querySelectorAll(".w-dyn-item, .w-dyn-items > *"));
     if(!items.length) return null;
 
-    const out = [];
+    const key = String(iso||"").trim().toUpperCase();
+
     for(const it of items){
-      let iso =
-        (it.querySelector('[data-ul-country="iso"]')?.textContent || "").trim().toUpperCase() ||
-        (it.querySelector(".iso-code")?.textContent || "").trim().toUpperCase();
+      const itemIso = (it.querySelector(".iso-code")?.textContent || "").trim().toUpperCase();
+      if(itemIso !== key) continue;
 
-      if(!iso){
-        const txt = (it.textContent || "").toUpperCase();
-        const mm = txt.match(/\b[A-Z]{2}\b/);
-        if(mm) iso = mm[0];
-      }
-      if(!iso) continue;
+      // banner-img-1 and banner-img-2 can be <img> or wrappers
+      const wideEl = it.querySelector(".banner-img-1");
+      const squareEl = it.querySelector(".banner-img-2");
 
-      // pattern A: data attrs
-      let wide =
-        safeUrl(it.querySelector('img[data-ul-country="banner_wide"]')?.getAttribute("src") || "") ||
-        safeUrl(it.querySelector("img.banner-img-1")?.getAttribute("src") || "") ||
+      const wide =
+        safeUrl(wideEl?.getAttribute?.("src") || "") ||
         safeUrl(it.querySelector(".banner-img-1 img")?.getAttribute("src") || "");
 
-      let square =
-        safeUrl(it.querySelector('img[data-ul-country="banner_square"]')?.getAttribute("src") || "") ||
-        safeUrl(it.querySelector("img.banner-img-2")?.getAttribute("src") || "") ||
+      const square =
+        safeUrl(squareEl?.getAttribute?.("src") || "") ||
         safeUrl(it.querySelector(".banner-img-2 img")?.getAttribute("src") || "");
 
-      // fallback: first 2 imgs in item
-      if(!wide || !square){
-        const imgs = Array.from(it.querySelectorAll("img"))
-          .map(img => safeUrl(img.currentSrc || img.getAttribute("src") || ""))
-          .filter(Boolean);
-        if(!wide && imgs[0]) wide = imgs[0];
-        if(!square && imgs[1]) square = imgs[1];
-      }
-
-      out.push({ iso, wide, square });
+      return { iso: key, wide, square };
     }
-    return out.length ? out : null;
+
+    return null;
   }
 
-  function pickCountryRow(iso){
-    const list = readCountryBannersFromCMS();
-    if(!list) return null;
-    const key = String(iso||"").trim().toUpperCase();
-    return list.find(x => x.iso === key) || null;
-  }
-
-  // expose for console tests
+  // expose debug helper
   window.getCountryBanner = (iso, kind) => {
-    const row = pickCountryRow(iso);
+    const row = readCountryRow(iso);
     if(!row) return "";
     return (kind==="wide" ? row.wide : row.square) || "";
   };
 
-  // ---------- main render minimal (to prove banners) ----------
-  function ensureRoot(){
-    let root=document.getElementById("ulydia-metier-root");
-    if(!root){
-      root=document.createElement("div");
-      root.id="ulydia-metier-root";
-      document.body.prepend(root);
-    }
-    return root;
+  // ---- Render (minimal to prove banners + title + desc from CMS)
+  function readCmsDescription(){
+    const root = document.getElementById(CFG.CMS_PAYLOAD_ID) || document;
+    const d = root.querySelector('[data-ul-f="description"]')?.textContent?.trim();
+    return d || "";
   }
 
   async function main(){
-    const slug = slugFromPath();
-    const finalLang = getFinalLang();
-
-    // DEBUG: countriesData presence
-    const cd = document.getElementById(CFG.COUNTRIES_DATA_ID);
-    log("countriesData present?", !!cd);
-
-    // If you use shell-mode, apply AFTER root exists
-    ensureRoot();
+    const root = ensureRoot();
     applyShellMode();
 
-    // get country from your global footer (if set), else FR
+    const slug = slugFromPath();
+    const finalLang = getFinalLang();
     const country = (window.VISITOR_COUNTRY || "FR").toString().toUpperCase().replace(/[^A-Z]/g,"") || "FR";
 
-    const row = pickCountryRow(country);
+    // IMPORTANT: wait for countriesData since it's at bottom
+    const ready = await waitForCountriesData({ timeoutMs: 8000 });
+    log("countriesData ready?", ready);
+
+    const row = readCountryRow(country);
+    log("country row", row);
+
     const wide = pickUrl(row?.wide || "");
     const square = pickUrl(row?.square || "");
 
-    log("non-sponsor banners test", { country, wide: !!wide, square: !!square });
-
-    const root = ensureRoot();
+    const desc = readCmsDescription();
     root.innerHTML = `
-      <div style="max-width:1120px;margin:20px auto;padding:16px;">
-        <h1 style="font-size:28px;font-weight:800;margin:0 0 12px;">${slug}</h1>
-        <div style="display:grid;grid-template-columns:1.55fr 1fr;gap:16px;">
-          <a href="/sponsorship" style="border:1px solid rgba(255,255,255,.12);border-radius:18px;overflow:hidden;display:block">
-            <img src="${wide || ""}" style="width:100%;display:block;aspect-ratio:16/5;object-fit:cover;background:rgba(255,255,255,.04)" />
-          </a>
-          <a href="/sponsorship" style="border:1px solid rgba(255,255,255,.12);border-radius:18px;overflow:hidden;display:block">
-            <img src="${square || ""}" style="width:100%;display:block;aspect-ratio:1/1;object-fit:cover;background:rgba(255,255,255,.04)" />
-          </a>
-        </div>
-        <div style="margin-top:10px;color:rgba(255,255,255,.7);font-size:13px;">
-          Lang: ${finalLang} — ISO: ${country}
+      <div class="ul-wrap">
+        <div class="ul-hero">
+          <div class="ul-card ul-card-pad">
+            <h1 class="ul-title">${slug}</h1>
+            ${desc ? `<p class="ul-sub">${desc.slice(0,180)}${desc.length>180?"…":""}</p>` : ""}
+            <div class="ul-meta">
+              <span class="ul-pill">ISO: ${country}</span>
+              <span class="ul-pill">Lang: ${finalLang}</span>
+            </div>
+          </div>
+          <div class="ul-banners">
+            <a class="ul-banner ul-banner-wide" href="/sponsorship"><img src="${wide}" /></a>
+            <a class="ul-banner ul-banner-square" href="/sponsorship"><img src="${square}" /></a>
+          </div>
         </div>
       </div>
     `;
