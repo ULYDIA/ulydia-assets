@@ -1178,7 +1178,24 @@ async function resolveBanners(meta, finalLang) {
   // =========================================================
   // 9) BOOTSTRAP
   // =========================================================
+  function domReady(){
+    if (document.readyState === "complete" || document.readyState === "interactive") return Promise.resolve();
+    return new Promise((resolve) => document.addEventListener("DOMContentLoaded", resolve, { once: true }));
+  }
+
+  async function waitFor(selector, timeoutMs = 2500){
+    const t0 = Date.now();
+    while (Date.now() - t0 < timeoutMs) {
+      const el = document.querySelector(selector);
+      if (el) return el;
+      await new Promise(r => setTimeout(r, 50));
+    }
+    return null;
+  }
   async function main() {
+    // Ensure Webflow/CMS DOM is in place before we read payload.
+    await domReady();
+
     injectCSS();
 
     const root = UI.ensureRoot();
@@ -1201,6 +1218,8 @@ async function resolveBanners(meta, finalLang) {
     const workerModel = workerToModel(res.data || null);
 
     // CMS fallback
+    // Some pages render the hidden CMS payload late; wait a moment for it.
+    await waitFor("#ul_cms_payload", 2500);
     const cmsModel = cmsToModel(readCmsPayload());
 
     // Merge policy: keep worker meta (sponsor), but fill empty content from CMS
