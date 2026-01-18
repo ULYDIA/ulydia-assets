@@ -503,7 +503,17 @@
   }
 
   async function fetchMetierData({ slug, country, lang }) {
-    const payload = { metier_slug: slug, country, lang };
+    // Send multiple key variants to match older/newer Worker expectations
+    // (we saw 400: "Missing metier/country" on /sponsor-info)
+    const payload = {
+      metier_slug: slug,
+      metier: slug,
+      slug,
+      country,
+      iso: country,
+      lang,
+      finalLang: lang,
+    };
 
     // 1) Optional endpoint
     try {
@@ -528,11 +538,20 @@
   // 5) CMS PAYLOAD FALLBACK
   // =========================================================
   function readCmsPayload() {
-    const root = document.getElementById("ul_cms_payload");
-    if (!root) return null;
+    // Primary: hidden payload container
+    let root = document.getElementById("ul_cms_payload");
 
-    const nodes = root.querySelectorAll("[data-ul-f]");
-    if (!nodes?.length) return null;
+    // Fallback: some pages may not have the wrapper ID; in that case,
+    // read any [data-ul-f] on the page (excluding our own root).
+    let nodes = null;
+    if (root) {
+      nodes = root.querySelectorAll("[data-ul-f]");
+    } else {
+      nodes = Array.from(document.querySelectorAll("[data-ul-f]"))
+        .filter((n) => !n.closest("#ulydia-metier-root"));
+    }
+
+    if (!nodes || !nodes.length) return null;
 
     const out = {};
     nodes.forEach((n) => {
