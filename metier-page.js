@@ -1296,7 +1296,16 @@ async function resolveBanners(meta, finalLang, countryISO) {
     log("ready", { mode: res.mode, sponsored: !!model.meta.sponsored });
   }
 
-  main().catch((e) => {
-    console.error("[metier-page] fatal", e);
+function boot() {
+  main().catch(err => {
+    console.error("[metier-page] fatal error", err);
   });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", boot);
+} else {
+  boot();
+}
+
 })();
