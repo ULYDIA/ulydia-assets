@@ -1,261 +1,227 @@
-/* metier-page.js — Ulydia (PROD v4)
-   - No flash: hides banners until sponsor verdict
-   - Fetch sponsor verdict (POST /sponsor-info)
-   - If sponsored: set both banners (logo_2 -> banner1, logo_1 -> banner2) + click link
-   - If sponsor.link missing: fallback to /sponsor?metier=...&country=...
-   - Emits uydia:sponsor-ready + sets SPONSORED_ACTIVE early
-*/
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_PROD_V4__) return;
-  window.__ULYDIA_METIER_PAGE_PROD_V4__ = true;
+  if (window.__ULYDIA_METIER_PAGE_PROD__) return;
+  window.__ULYDIA_METIER_PAGE_PROD__ = true;
 
+  const DEBUG = !!window.__METIER_PAGE_DEBUG__;
+  const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
+
+  // =========================================================
+  // CONFIG
+  // =========================================================
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
-  const ENDPOINT     = "/sponsor-info";
 
-  const BANNER_1_ID  = "nonSponsorBanner01"; // landscape slot
-  const BANNER_2_ID  = "nonSponsorBanner02"; // square slot
+  // IDs Webflow (tes blocs)
+  const ID_SPONSORED_BLOCK     = "block-sponsored";
+  const ID_NOT_SPONSORED_BLOCK = "block-not-sponsored";
 
-  // Hide banners until verdict (prevents non-sponsor flash)
-  const HIDE_CLASS = "ulydia-sponsor-loading";
+  // =========================================================
+  // HELPERS
+  // =========================================================
+  const qp = (name) => new URLSearchParams(location.search).get(name);
+  const $ = (id) => document.getElementById(id);
+  const apiBase = () => String(WORKER_URL || "").replace(/\/$/, "");
 
-  function apiBase(){ return String(WORKER_URL || "").replace(/\/$/, ""); }
-  function $(id){ return document.getElementById(id); }
+  const normIso = (v) => String(v || "").trim().toUpperCase().replace(/[^A-Z]/g, "");
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-  function qp(name){ return new URLSearchParams(location.search).get(name); }
+  function show(el, yes){
+    if (!el) return;
+    el.style.display = yes ? "" : "none";
+    el.style.visibility = yes ? "" : "hidden";
+    el.style.opacity = yes ? "" : "0";
+  }
 
-  function getMetier(){
-    return (
-      document.querySelector("[data-metier]")?.getAttribute("data-metier") ||
-      document.getElementById("metier-slug")?.textContent?.trim() ||
-      qp("metier")?.trim() ||
-      location.pathname.split("/").filter(Boolean).pop() ||
-      ""
-    );
+  function pickUrl(v){
+    if (!v) return "";
+    if (typeof v === "string") return v.trim();
+    if (Array.isArray(v)) return (v[0]?.url || v[0]?.thumbnails?.large?.url || v[0]?.thumbnails?.full?.url || "").trim();
+    if (typeof v === "object") return (v.url || v.thumbnails?.large?.url || v.thumbnails?.full?.url || "").trim();
+    return "";
+  }
+
+  function setImgHard(imgEl, url){
+    if (!imgEl || !url) return;
+    try{
+      imgEl.removeAttribute("srcset");
+      imgEl.removeAttribute("sizes");
+      imgEl.setAttribute("src", url);
+      imgEl.setAttribute("srcset", url);
+      imgEl.style.visibility = "";
+      imgEl.style.opacity = "";
+    }catch(e){}
+  }
+
+  function makeClickable(node, url){
+    if (!node || !url) return;
+
+    // 1) si déjà dans un <a>, on met href
+    const a = node.closest("a");
+    if (a){
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.style.pointerEvents = "auto";
+      return;
+    }
+
+    // 2) sinon, on rend l'image cliquable
+    node.style.cursor = "pointer";
+    node.style.pointerEvents = "auto";
+    node.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.open(url, "_blank", "noopener,noreferrer");
+    }, { passive: false });
+  }
+
+  function decided(){
+    // enlève l’anti-flash
+    document.documentElement.classList.remove("ul-sponsor-loading");
+  }
+
+  // =========================================================
+  // CONTEXT (metier / country)
+  // =========================================================
+  function findMetierSlug(){
+    const fromQP = (qp("metier") || "").trim();
+    if (fromQP) return fromQP;
+
+    const ms = $("metier-slug");
+    if (ms && ms.textContent.trim()) return ms.textContent.trim();
+
+    const any = document.querySelector("[data-metier]");
+    if (any){
+      const v = (any.getAttribute("data-metier") || "").trim();
+      if (v) return v;
+    }
+
+    const parts = location.pathname.split("/").filter(Boolean);
+    return parts[parts.length - 1] || "";
   }
 
   function getCountry(){
-    return String(
-      window.VISITOR_COUNTRY ||
-      qp("country") ||
-      "FR"
-    ).toUpperCase();
+    return (
+      normIso(window.VISITOR_COUNTRY) ||
+      normIso(qp("country")) ||
+      normIso($("country-iso")?.textContent) ||
+      "US"
+    );
   }
 
-  function sponsorFallbackUrl(metier, country){
-    return `/sponsor?metier=${encodeURIComponent(metier)}&country=${encodeURIComponent(country)}`;
+  // =========================================================
+  // DOM mapping bannières (on ne dépend PAS de sponsor-logo-1/2)
+  // =========================================================
+  function getBannerTargets(){
+    const sponsoredBlock = $(ID_SPONSORED_BLOCK);
+
+    // Priorité aux IDs que tu as réellement (d’après tes logs)
+    const b1 =
+      document.querySelector("#nonSponsorBanner01") ||
+      sponsoredBlock?.querySelector('img[id*="Banner01" i]') ||
+      sponsoredBlock?.querySelector("img");
+
+    const b2 =
+      document.querySelector("#nonSponsorBanner02") ||
+      sponsoredBlock?.querySelector('img[id*="Banner02" i]') ||
+      (sponsoredBlock ? sponsoredBlock.querySelectorAll("img")[1] : null);
+
+    return { b1, b2 };
   }
 
-  function installHideStyle(){
-    if (document.getElementById("ul_sponsor_hide_css")) return;
-    const s = document.createElement("style");
-    s.id = "ul_sponsor_hide_css";
-    s.textContent = `
-      html.${HIDE_CLASS} #${BANNER_1_ID},
-      html.${HIDE_CLASS} #${BANNER_2_ID}{
-        visibility:hidden !important;
-        opacity:0 !important;
-      }
-    `;
-    document.head.appendChild(s);
-  }
+  // =========================================================
+  // API sponsor-info (POST)
+  // =========================================================
+  async function fetchSponsorInfo(metier, country){
+    const url = apiBase() + "/sponsor-info";
+    const headers = { "Content-Type": "application/json", "accept":"application/json" };
+    if (PROXY_SECRET) headers["x-proxy-secret"] = PROXY_SECRET;
 
-  function setLoading(on){
-    try{
-      installHideStyle();
-      if (on) document.documentElement.classList.add(HIDE_CLASS);
-      else document.documentElement.classList.remove(HIDE_CLASS);
-    }catch(e){}
-  }
-
-  function setImgHard(el, url){
-    if (!el || !url) return false;
-
-    if (el.tagName && el.tagName.toLowerCase() === "img") {
-      el.removeAttribute("srcset");
-      el.removeAttribute("sizes");
-      el.setAttribute("src", url);
-      el.setAttribute("srcset", "");
-      el.style.opacity = "0.999";
-      requestAnimationFrame(() => { el.style.opacity = ""; });
-      return true;
-    }
-
-    const img = el.querySelector && el.querySelector("img");
-    if (img) return setImgHard(img, url);
-
-    try{
-      el.style.backgroundImage = `url("${url}")`;
-      el.style.backgroundSize = "cover";
-      el.style.backgroundPosition = "center";
-      el.style.backgroundRepeat = "no-repeat";
-      return true;
-    }catch(e){}
-    return false;
-  }
-
-  // Click guarantee via overlay <a> above banners
-  function ensureOverlayLayer(){
-    let c = document.getElementById("ul_sponsor_overlay_layer");
-    if (c) return c;
-    c = document.createElement("div");
-    c.id = "ul_sponsor_overlay_layer";
-    c.style.position = "fixed";
-    c.style.left = "0";
-    c.style.top = "0";
-    c.style.width = "100%";
-    c.style.height = "100%";
-    c.style.zIndex = "2147483647";
-    c.style.pointerEvents = "none";
-    c.style.background = "transparent";
-    document.body.appendChild(c);
-    return c;
-  }
-
-  function placeOverlay(id, rect, url){
-    const layer = ensureOverlayLayer();
-    let a = document.getElementById(id);
-    if (!a){
-      a = document.createElement("a");
-      a.id = id;
-      a.style.position = "absolute";
-      a.style.display = "block";
-      a.style.pointerEvents = "auto";
-      a.style.background = "transparent";
-      a.style.cursor = "pointer";
-      layer.appendChild(a);
-    }
-    a.setAttribute("href", url);
-    a.setAttribute("target", "_blank");
-    a.setAttribute("rel", "noopener noreferrer");
-
-    a.style.left = Math.max(0, rect.left) + "px";
-    a.style.top = Math.max(0, rect.top) + "px";
-    a.style.width = Math.max(0, rect.width) + "px";
-    a.style.height = Math.max(0, rect.height) + "px";
-
-    const active = rect.width > 5 && rect.height > 5;
-    a.style.pointerEvents = active ? "auto" : "none";
-  }
-
-  function bindOverlays(el1, el2, url){
-    if (!url) return;
-
-    const update = () => {
-      if (el1) placeOverlay("ul_sponsor_click_1", el1.getBoundingClientRect(), url);
-      if (el2) placeOverlay("ul_sponsor_click_2", el2.getBoundingClientRect(), url);
-    };
-
-    update();
-
-    let raf = 0;
-    const onMove = () => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => { raf = 0; update(); });
-    };
-
-    window.addEventListener("scroll", onMove, { passive: true });
-    window.addEventListener("resize", onMove, { passive: true });
-
-    setTimeout(update, 250);
-    setTimeout(update, 800);
-    setTimeout(update, 1600);
-  }
-
-  function emitSponsorReady(sponsored, payload){
-    try{
-      window.dispatchEvent(new CustomEvent("ulydia:sponsor-ready", {
-        detail: { sponsored: !!sponsored, payload: payload || null }
-      }));
-    }catch(e){}
-  }
-
-  async function fetchSponsorInfo(metier, country, lang){
-    const res = await fetch(apiBase() + ENDPOINT, {
+    const res = await fetch(url, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-proxy-secret": PROXY_SECRET
-      },
-      body: JSON.stringify({ metier, country, lang }),
-      cache: "no-store"
+      headers,
+      body: JSON.stringify({ metier: String(metier).trim(), country: String(country).trim().toUpperCase() }),
+      cache: "no-store",
     });
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data) return null;
-    return data;
+
+    const txt = await res.text();
+    let data = null;
+    try { data = JSON.parse(txt); } catch(e) {}
+
+    return { ok: res.ok, status: res.status, data, txt };
   }
 
-  (async () => {
-    // Mark page as sponsor-aware for other scripts
-    window.__ULYDIA_PAGE_SPONSOR_SCRIPT__ = true;
+  // =========================================================
+  // APPLY UI
+  // =========================================================
+  async function applySponsorDecision(info){
+    const blockSponsored = $(ID_SPONSORED_BLOCK);
+    const blockNotSponsored = $(ID_NOT_SPONSORED_BLOCK);
 
-    const el1 = $(BANNER_1_ID);
-    const el2 = $(BANNER_2_ID);
+    const sponsored = !!info?.sponsored;
+    window.SPONSORED_ACTIVE = sponsored;
 
-    // If banners not present, nothing to do
-    if (!el1 && !el2) return;
+    if (sponsored){
+      show(blockSponsored, true);
+      show(blockNotSponsored, false);
 
-    // Hide banners immediately to prevent flash
-    setLoading(true);
+      const sponsor = info?.sponsor || {};
+      const link = String(sponsor.link || "").trim();
 
-    const metier = getMetier();
-    const country = getCountry();
-    const lang = String(window.VISITOR_LANG || qp("lang") || "en").toLowerCase().split("-")[0];
+      const logo1 = pickUrl(sponsor.logo_1);
+      const logo2 = pickUrl(sponsor.logo_2);
 
-    if (!metier || !country) {
-      window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored: false };
-      window.SPONSORED_ACTIVE = false;
-      emitSponsorReady(false, { error: "missing_metier_or_country" });
-      setLoading(false);
-      return;
+      const { b1, b2 } = getBannerTargets();
+
+      if (logo1) setImgHard(b1, logo1);
+      if (logo2) setImgHard(b2, logo2);
+
+      if (link){
+        makeClickable(b1, link);
+        makeClickable(b2, link);
+      }
+
+    } else {
+      show(blockSponsored, false);
+      show(blockNotSponsored, true);
     }
 
-    const data = await fetchSponsorInfo(metier, country, lang);
+    decided();
+  }
 
-    // If worker failed, fall back to non-sponsored behavior (let footer handle)
-    if (!data) {
-      window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored: false };
-      window.SPONSORED_ACTIVE = false;
-      emitSponsorReady(false, { error: "worker_no_data" });
-      setLoading(false);
-      return;
+  // =========================================================
+  // BOOT
+  // =========================================================
+  (async function boot(){
+    try{
+      const metier = findMetierSlug();
+      const country = getCountry();
+      log("context:", { metier, country });
+
+      if (!metier){
+        await applySponsorDecision({ sponsored: false });
+        return;
+      }
+
+      // (optionnel) mini délai pour laisser Webflow injecter le DOM si besoin
+      // mais l’anti-flash empêche toute apparition non sponsor
+      await sleep(30);
+
+      const r = await fetchSponsorInfo(metier, country);
+      log("sponsor-info:", r.status, r.data);
+
+      if (!r.ok || !r.data || typeof r.data !== "object"){
+        await applySponsorDecision({ sponsored: false });
+        return;
+      }
+
+      await applySponsorDecision(r.data);
+
+    }catch(e){
+      console.warn("[metier-page] boot error", e);
+      try { await applySponsorDecision({ sponsored: false }); } catch(_){}
     }
-
-    const sponsored = !!data.sponsored;
-    window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored };
-
-    if (!sponsored) {
-      window.SPONSORED_ACTIVE = false;
-      emitSponsorReady(false, data);
-      // show banners back (footer will put translated non-sponsor)
-      setLoading(false);
-      return;
-    }
-
-    // Sponsored: set flag early
-    window.SPONSORED_ACTIVE = true;
-
-    const sponsor = data.sponsor || {};
-    const urlLandscape = String(sponsor.logo_2 || "").trim();
-    const urlSquare    = String(sponsor.logo_1 || "").trim();
-
-    const target1 = urlLandscape || urlSquare;
-    const target2 = urlSquare || urlLandscape;
-
-    if (el1 && target1) setImgHard(el1, target1);
-    if (el2 && target2) setImgHard(el2, target2);
-
-    // Link: sponsor.link OR fallback to /sponsor?metier&country
-    const sponsorLink = String(sponsor.link || "").trim();
-    const clickUrl = sponsorLink || sponsorFallbackUrl(metier, country);
-
-    // Click overlays above banners (guaranteed)
-    bindOverlays(el1, el2, clickUrl);
-
-    emitSponsorReady(true, data);
-
-    // Finally show banners
-    setLoading(false);
   })();
 
 })();
+
