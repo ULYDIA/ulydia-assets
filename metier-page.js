@@ -1,4 +1,14 @@
+/* metier-page.js — v5.1 (FULL) */
 (() => {
+  // ============================================================================
+  // Ulydia — Metier Page (Full-code) v5.1
+  // - Sponsor vs non-sponsor banners
+  // - Non-sponsor banners from #countriesData (Webflow CMS)
+  // - Waits for VISITOR_COUNTRY/LANG (set by your footer)
+  // - Robust countriesData parsing:
+  //    * prefers .w-dyn-item attributes: data-iso, data-banner-cta, data-banner-text, data-banner-img-1/2
+  //    * falls back to children roles/classes if present
+  // ============================================================================
   if (window.__ULYDIA_METIER_PAGE__) return;
   window.__ULYDIA_METIER_PAGE__ = true;
 
@@ -6,322 +16,325 @@
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
 
-  // =========================
+  // =========================================================
   // CONFIG
-  // =========================
-  const CFG = {
-    WORKER_URL: "https://ulydia-business.contact-871.workers.dev",
-    PROXY_SECRET: "ulydia_2026_proxy_Y4b364u2wsFsQL",
-    SPONSOR_INFO_ENDPOINT: "/sponsor-info",
+  // =========================================================
+  const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
+  const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
 
-    COUNTRIES_DATA_ID: "countriesData",
+  // DOM ids (your page)
+  const ID_SPONSORED      = "block-sponsored";
+  const ID_NOT_SPONSORED  = "block-not-sponsored";
+  const COUNTRIES_DATA_ID = "countriesData";
 
-    // Where to render the full-code page
-    ROOT_ID: "ulydia-metier-root",
+  // =========================================================
+  // helpers
+  // =========================================================
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
-    // If sponsor-info returns a click url use it, else fallback:
-    FALLBACK_SPONSOR_URL: "/sponsor",
+  const normIso = v => String(v || "").toUpperCase().replace(/[^A-Z]/g, "");
+  const normLang = v => String(v || "").toLowerCase().split("-")[0];
 
-    // If your metier pages are /fiche-metiers/<slug>
-    JOB_SEGMENT: "fiche-metiers",
-
-    GEO_WAIT_MS: 2500,
-    COUNTRIES_WAIT_MS: 8000,
-  };
-
-  // =========================
-  // Utils
-  // =========================
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const normIso = (v) => String(v || "").toUpperCase().replace(/[^A-Z]/g, "");
-  const normLang = (v) => String(v || "").toLowerCase().split("-")[0];
-
-  function safeUrl(u){
-    const s = String(u || "").trim();
-    if (!s) return "";
-    // allow relative or https
-    if (s.startsWith("/")) return s;
-    if (s.startsWith("https://")) return s;
-    if (s.startsWith("http://")) return s; // ok for dev
-    return s;
+  function show(el, yes){
+    if (!el) return;
+    el.style.display = yes ? "" : "none";
+    el.style.visibility = yes ? "" : "hidden";
+    el.style.opacity = yes ? "" : "0";
   }
 
-  function metierSlug(){
+  function api(path){
+    return WORKER_URL.replace(/\/$/, "") + path;
+  }
+
+  function findMetier(){
     const dm = document.querySelector("[data-metier]")?.getAttribute("data-metier");
     if (dm) return dm.trim();
     const parts = location.pathname.split("/").filter(Boolean);
-    const idx = parts.findIndex(p => p === CFG.JOB_SEGMENT);
-    if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
     return parts[parts.length - 1] || "";
   }
 
-  async function waitForVisitorGeo(timeoutMs){
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs){
+  // Wait for VISITOR_COUNTRY / VISITOR_LANG (set by your footer global)
+  async function waitForGeo(maxMs = 2500){
+    const t0 = Date.now();
+    while (Date.now() - t0 < maxMs){
       const c = normIso(window.VISITOR_COUNTRY);
       const l = normLang(window.VISITOR_LANG);
-      if (c) return { country: c, lang: l || "en" };
-      await sleep(50);
+      if (c && l) return { country: c, lang: l };
+      await new Promise(r => setTimeout(r, 80));
     }
     // fallback
-    return { country: "US", lang: "en" };
+    return {
+      country: normIso(window.VISITOR_COUNTRY) || "US",
+      lang: normLang(window.VISITOR_LANG) || "en",
+    };
   }
 
-  async function waitForCountriesData(timeoutMs){
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs){
-      const root = document.getElementById(CFG.COUNTRIES_DATA_ID);
-      if (root){
-        const items = root.querySelectorAll(".w-dyn-item,[role='listitem'],.w-dyn-items>*");
-        if (items && items.length) return root;
-      }
-      await sleep(80);
-    }
-    return null;
-  }
-
-  function bgUrl(el){
+  // ---------------------------
+  // countriesData parsing
+  // ---------------------------
+  function getBgImageUrl(el){
     if (!el) return "";
     const bg = getComputedStyle(el).backgroundImage || "";
-    const m = bg.match(/url\(["']?(.*?)["']?\)/i);
-    return m && m[1] ? safeUrl(m[1]) : "";
+    // url("...") or url(...)
+    const m = bg.match(/url\\((['\"]?)(.*?)\\1\\)/i);
+    return m?.[2] || "";
   }
 
-  function imgUrlFromNode(node){
-    if (!node) return "";
-    if (node.tagName === "IMG"){
-      return safeUrl(node.currentSrc || node.getAttribute("src") || "");
+  function getImgSrc(el){
+    if (!el) return "";
+    if (el.tagName === "IMG") return el.getAttribute("src") || "";
+    const img = el.querySelector?.("img");
+    return img?.getAttribute("src") || "";
+  }
+
+  function pickFirstUrl(...vals){
+    for (const v of vals){
+      const s = String(v || "").trim();
+      if (!s) continue;
+      if (s.startsWith("http://") || s.startsWith("https://")) return s;
     }
-    const img = node.querySelector("img");
-    if (img) return safeUrl(img.currentSrc || img.getAttribute("src") || "");
-    return bgUrl(node);
+    return "";
   }
 
-  function readRowFromCountriesData(root, iso){
+  function readRowFromItem(it){
+    // Prefer attributes on the w-dyn-item (this matches your outerHTML screenshots)
+    const iso  = normIso(it.getAttribute("data-iso") || it.dataset.iso);
+    const lang = normLang(it.getAttribute("data-lang") || it.dataset.lang);
+
+    const text = (it.getAttribute("data-banner-text") || it.dataset.bannerText || "").trim();
+    const cta  = (it.getAttribute("data-banner-cta")  || it.dataset.bannerCta  || "").trim();
+
+    // Images: try item attributes first (if you add them later), then child nodes, then bg-image
+    const a1 = it.getAttribute("data-banner-img-1") || it.getAttribute("data-img-1") || it.dataset.bannerImg1 || "";
+    const a2 = it.getAttribute("data-banner-img-2") || it.getAttribute("data-img-2") || it.dataset.bannerImg2 || "";
+
+    // If Webflow keeps children: try common selectors
+    const img1El =
+      it.querySelector('[data-role=\"img1\"]') ||
+      it.querySelector('.banner-img-1') ||
+      it.querySelector('img.banner-img-1') ||
+      null;
+
+    const img2El =
+      it.querySelector('[data-role=\"img2\"]') ||
+      it.querySelector('.banner-img-2') ||
+      it.querySelector('img.banner-img-2') ||
+      null;
+
+    const wide   = pickFirstUrl(a1, getImgSrc(img1El), getBgImageUrl(img1El));
+    const square = pickFirstUrl(a2, getImgSrc(img2El), getBgImageUrl(img2El));
+
+    // Also fallback: if there are 2 imgs in the row
+    if ((!wide || !square) && it.querySelectorAll("img").length >= 2){
+      const imgs = it.querySelectorAll("img");
+      const w2 = getImgSrc(imgs[0]);
+      const s2 = getImgSrc(imgs[1]);
+      return { iso, lang, text, cta, wide: wide || w2, square: square || s2 };
+    }
+
+    return { iso, lang, text, cta, wide, square };
+  }
+
+  function findCountriesDataRoot(){
+    return document.getElementById(COUNTRIES_DATA_ID);
+  }
+
+  // Return country row for ISO from countriesData
+  function getCountriesRowByIso(root, iso){
+    if (!root) return null;
     const key = normIso(iso);
-    const items = Array.from(root.querySelectorAll(".w-dyn-item,[role='listitem'],.w-dyn-items>*"));
+    const items = $$(".w-dyn-item, [role='listitem'], .w-dyn-items > *", root);
 
+    // IMPORTANT: your debug showed items=100 and FR missing. If missing, return null.
     for (const it of items){
-      // Your published DOM shows attributes like data-iso / data-banner-text / data-banner-cta
-      const itemIso = normIso(it.getAttribute("data-iso"));
-      if (itemIso !== key) continue;
-
-      const lang =
-        normLang(it.querySelector('[data-role="lang"]')?.textContent) ||
-        normLang(it.querySelector(".lang-code")?.textContent) ||
-        "";
-
-      const text =
-        (it.getAttribute("data-banner-text") || it.querySelector(".banner-text")?.textContent || "").trim();
-
-      const cta =
-        (it.getAttribute("data-banner-cta") || it.querySelector(".banner-cta")?.textContent || "").trim();
-
-      // Images: try find any <img> inside item (often 2 images in your hidden structure)
-      const imgs = Array.from(it.querySelectorAll("img"))
-        .map(im => safeUrl(im.currentSrc || im.getAttribute("src") || ""))
-        .filter(Boolean);
-
-      let wide = imgs[0] || "";
-      let square = imgs[1] || "";
-
-      // If no <img>, try by class names (if Webflow rendered wrappers)
-      if (!wide) wide = imgUrlFromNode(it.querySelector(".banner-img-1")) || "";
-      if (!square) square = imgUrlFromNode(it.querySelector(".banner-img-2")) || "";
-
-      // last resort: any element that looks like it has a bg image
-      if (!wide){
-        const anyBg = Array.from(it.querySelectorAll("*")).map(bgUrl).filter(Boolean);
-        wide = anyBg[0] || "";
-        square = square || anyBg[1] || "";
-      }
-
-      return { iso: key, lang, text, cta, wide, square };
+      const itIso = normIso(it.getAttribute("data-iso") || it.dataset.iso);
+      if (!itIso) continue;
+      if (itIso !== key) continue;
+      return readRowFromItem(it);
     }
     return null;
   }
 
-  async function fetchSponsorInfo({ metier, country, lang }){
-    const url = CFG.WORKER_URL.replace(/\/$/, "") + CFG.SPONSOR_INFO_ENDPOINT;
-    const res = await fetch(url, {
+  // ---------------------------
+  // sponsor info
+  // ---------------------------
+  async function fetchSponsorInfo(metier, geo){
+    const res = await fetch(api("/sponsor-info"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-proxy-secret": CFG.PROXY_SECRET
+        "x-proxy-secret": PROXY_SECRET,
       },
-      body: JSON.stringify({ metier, country, lang })
+      body: JSON.stringify({
+        metier,
+        country: geo.country,
+        lang: geo.lang,
+      }),
     });
     if (!res.ok) return null;
     return await res.json();
   }
 
-  // =========================
-  // UI (simple modern shell — you can refine later)
-  // =========================
-  function injectCss(){
-    if (document.getElementById("ul_metier_css_v51")) return;
-    const s = document.createElement("style");
-    s.id = "ul_metier_css_v51";
-    s.textContent = `
-      html.ul-metier-dark, html.ul-metier-dark body{
-        background: radial-gradient(1200px 600px at 20% -10%, rgba(100,108,253,0.22), transparent 55%),
-                    radial-gradient(900px 500px at 95% 10%, rgba(255,255,255,0.06), transparent 60%),
-                    linear-gradient(180deg, #0b1020, #070b16) !important;
-      }
-      #${CFG.ROOT_ID}{ color:#fff; font-family:Montserrat,system-ui,-apple-system,Segoe UI,Roboto,Arial; }
-      .ul-wrap{ max-width:1120px; margin:0 auto; padding:22px 14px 26px; }
-      .ul-hero{ display:grid; grid-template-columns:1.55fr 1fr; gap:16px; }
-      @media(max-width:960px){ .ul-hero{ grid-template-columns:1fr; } }
-      .ul-card{
-        background:rgba(255,255,255,.06);
-        border:1px solid rgba(255,255,255,.10);
-        border-radius:22px;
-        box-shadow:0 16px 50px rgba(0,0,0,.35);
-        overflow:hidden;
-        backdrop-filter: blur(10px);
-      }
-      .ul-pad{ padding:18px; }
-      .ul-title{ font-size:34px; font-weight:850; letter-spacing:-.02em; margin:0 0 10px; line-height:1.12; }
-      .ul-sub{ color:rgba(255,255,255,.70); font-size:14.5px; line-height:1.65; margin:0; }
-      .ul-banners{ display:grid; gap:16px; }
-      .ul-banner{
-        display:block;
-        border-radius:22px;
-        overflow:hidden;
-        border:1px solid rgba(255,255,255,.10);
-        background:rgba(255,255,255,.03);
-        text-decoration:none;
-        color:inherit;
-      }
-      .ul-banner img{ width:100%; display:block; object-fit:cover; }
-      .ul-banner-wide{ aspect-ratio:16/5; }
-      .ul-banner-square{ aspect-ratio:1/1; }
-      .ul-banner-caption{ padding:12px 14px; font-size:13px; color:rgba(255,255,255,.75); border-top:1px solid rgba(255,255,255,.08); }
-    `;
-    document.head.appendChild(s);
-    document.documentElement.classList.add("ul-metier-dark");
+  function extractSponsorBanners(payload){
+    // Your convention on Airtable:
+    //  - sponsor_logo_1 = SQUARE
+    //  - sponsor_logo_2 = LANDSCAPE
+    const square = pickFirstUrl(
+      payload?.sponsor_logo_1,
+      payload?.logo_1,
+      payload?.square,
+      payload?.banner_square
+    );
+
+    const wide = pickFirstUrl(
+      payload?.sponsor_logo_2,
+      payload?.logo_2,
+      payload?.wide,
+      payload?.banner_wide
+    );
+
+    const link = (payload?.sponsor_link || payload?.link || payload?.url || "").trim();
+    return { wide, square, link };
   }
 
-  function ensureRoot(){
-    let root = document.getElementById(CFG.ROOT_ID);
-    if (!root){
-      root = document.createElement("div");
-      root.id = CFG.ROOT_ID;
-      document.body.prepend(root);
+  // ---------------------------
+  // render banners (simple)
+  // ---------------------------
+  function setBannerImg(container, url){
+    if (!container) return;
+    const img = container.tagName === "IMG" ? container : container.querySelector("img");
+    if (img){
+      img.src = url || "";
+      img.style.display = url ? "" : "none";
+      return;
     }
-    return root;
+    // fallback bg
+    if (url){
+      container.style.backgroundImage = `url("${url}")`;
+    } else {
+      container.style.backgroundImage = "";
+    }
   }
 
-  function render({ title, subtitle, bannerWide, bannerSquare, bannerUrl, bannerCaption }){
-    const root = ensureRoot();
-    injectCss();
-
-    const wideHtml = bannerWide ? `
-      <a class="ul-banner" href="${bannerUrl || CFG.FALLBACK_SPONSOR_URL}">
-        <img class="ul-banner-wide" src="${bannerWide}" alt="">
-        ${bannerCaption ? `<div class="ul-banner-caption">${bannerCaption}</div>` : ``}
-      </a>` : ``;
-
-    const squareHtml = bannerSquare ? `
-      <a class="ul-banner" href="${bannerUrl || CFG.FALLBACK_SPONSOR_URL}">
-        <img class="ul-banner-square" src="${bannerSquare}" alt="">
-      </a>` : ``;
-
-    root.innerHTML = `
-      <div class="ul-wrap">
-        <div class="ul-hero">
-          <div class="ul-card"><div class="ul-pad">
-            <h1 class="ul-title">${title || ""}</h1>
-            <p class="ul-sub">${subtitle || ""}</p>
-          </div></div>
-
-          <div class="ul-banners">
-            ${wideHtml}
-            ${squareHtml}
-          </div>
-        </div>
-      </div>
-    `;
+  function setBannerLink(wrapper, href){
+    if (!wrapper) return;
+    // If wrapper is a link itself
+    if (wrapper.tagName === "A"){
+      wrapper.href = href || "#";
+      return;
+    }
+    const a = wrapper.querySelector("a");
+    if (a) a.href = href || "#";
   }
 
-  // =========================
-  // Main
-  // =========================
+  function applyBanners({ sponsored, sponsorBanners, countriesRow, geo }){
+    const sponsoredBlock = document.getElementById(ID_SPONSORED);
+    const notSponsoredBlock = document.getElementById(ID_NOT_SPONSORED);
+
+    // Always start hidden, then show one
+    show(sponsoredBlock, false);
+    show(notSponsoredBlock, false);
+
+    // Targets (you can adjust selectors if needed)
+    const sWideWrap   = sponsoredBlock && (sponsoredBlock.querySelector("[data-banner='wide'], .banner-wide, .banner-img-2, [data-role='img2']") || sponsoredBlock);
+    const sSquareWrap = sponsoredBlock && (sponsoredBlock.querySelector("[data-banner='square'], .banner-square, .banner-img-1, [data-role='img1']") || sponsoredBlock);
+
+    const nWideWrap   = notSponsoredBlock && (notSponsoredBlock.querySelector("[data-banner='wide'], .banner-wide, .banner-img-2, [data-role='img2']") || notSponsoredBlock);
+    const nSquareWrap = notSponsoredBlock && (notSponsoredBlock.querySelector("[data-banner='square'], .banner-square, .banner-img-1, [data-role='img1']") || notSponsoredBlock);
+
+    // Prefer sponsor banners if sponsored
+    if (sponsored && (sponsorBanners?.wide || sponsorBanners?.square)){
+      setBannerImg(sWideWrap, sponsorBanners.wide);
+      setBannerImg(sSquareWrap, sponsorBanners.square);
+      if (sponsorBanners.link){
+        setBannerLink(sWideWrap, sponsorBanners.link);
+        setBannerLink(sSquareWrap, sponsorBanners.link);
+      }
+      show(notSponsoredBlock, false);
+      show(sponsoredBlock, true);
+      return;
+    }
+
+    // Else: use countriesRow (non-sponsored)
+    if (countriesRow?.wide || countriesRow?.square){
+      setBannerImg(nWideWrap, countriesRow.wide);
+      setBannerImg(nSquareWrap, countriesRow.square);
+
+      // If your non-sponsored banners must go to /sponsor with ISO+lang
+      const href = `/sponsor?country=${encodeURIComponent(geo.country)}&lang=${encodeURIComponent(geo.lang)}`;
+      setBannerLink(nWideWrap, href);
+      setBannerLink(nSquareWrap, href);
+
+      show(sponsoredBlock, false);
+      show(notSponsoredBlock, true);
+      return;
+    }
+
+    // Absolute fallback: show non-sponsored block without images
+    show(sponsoredBlock, false);
+    show(notSponsoredBlock, true);
+  }
+
+  // =========================================================
+  // BOOT
+  // =========================================================
   (async () => {
+    const sponsoredBlock = document.getElementById(ID_SPONSORED);
+    const notSponsoredBlock = document.getElementById(ID_NOT_SPONSORED);
+
+    // Anti-flash: hide both immediately
+    show(sponsoredBlock, false);
+    show(notSponsoredBlock, false);
+    document.documentElement.classList.add("ul-sponsor-loading");
+
     try {
-      log("boot", VERSION);
+      log("version", VERSION);
 
-      // Wait geo first (so we call sponsor-info with the right country)
-      const geo = await waitForVisitorGeo(CFG.GEO_WAIT_MS);
-      const metier = metierSlug();
-      log("geo", geo, "metier", metier);
+      const metier = findMetier();
+      if (!metier) throw new Error("no metier");
 
-      // Wait hidden CMS at end of page
-      const cdRoot = await waitForCountriesData(CFG.COUNTRIES_WAIT_MS);
-      if (!cdRoot){
-        log("countriesData not found/ready");
-      } else {
-        log("countriesData ready", cdRoot.querySelectorAll(".w-dyn-item,[role='listitem'],.w-dyn-items>*").length);
+      const geo = await waitForGeo(3000);
+      log("geo", geo);
+
+      const root = findCountriesDataRoot();
+      const rowsCount = root ? $$(".w-dyn-item, [role='listitem'], .w-dyn-items > *", root).length : 0;
+      log("countriesData rows", rowsCount);
+
+      const countriesRow = getCountriesRowByIso(root, geo.country);
+      if (!countriesRow){
+        log(`no countriesData row for ${geo.country} (likely Webflow list limit 100 — split the list or add a fallback source)`);
       }
 
-      // Compute “final lang” from countriesData row if possible
-      let row = cdRoot ? readRowFromCountriesData(cdRoot, geo.country) : null;
-      if (!row){
-        log("no countriesData row for", geo.country, "(CHECK WEBFLOW LIMIT 100!)");
-      } else {
-        log("countriesData row", row);
-      }
+      const payload = await fetchSponsorInfo(metier, geo);
+      const sponsored = !!payload?.sponsored;
 
-      const finalLang = row?.lang || geo.lang || "en";
+      const sponsorBanners = extractSponsorBanners(payload);
 
-      // Fetch sponsor info
-      const sponsor = await fetchSponsorInfo({ metier, country: geo.country, lang: finalLang });
-      const sponsored = !!sponsor?.sponsored;
+      window.SPONSORED_ACTIVE = sponsored;
 
-      // Decide banners
-      let bannerWide = "";
-      let bannerSquare = "";
-      let bannerUrl = "";
+      applyBanners({ sponsored, sponsorBanners, countriesRow, geo });
 
-      if (sponsored){
-        bannerWide = safeUrl(sponsor?.banner_landscape || sponsor?.banner_wide || sponsor?.banner1 || "");
-        bannerSquare = safeUrl(sponsor?.banner_square || sponsor?.banner2 || "");
-        bannerUrl = safeUrl(sponsor?.click_url || sponsor?.url || "");
-      }
-
-      // fallback to non-sponsor banners from countriesData
-      if (!bannerWide && row?.wide) bannerWide = row.wide;
-      if (!bannerSquare && row?.square) bannerSquare = row.square;
-
-      // Title/subtitle: keep existing Webflow content in place (basic extraction)
-      const wfTitle =
-        document.querySelector("h1")?.textContent?.trim() ||
-        document.querySelector("[data-title]")?.textContent?.trim() ||
-        metier;
-
-      const wfSubtitle =
-        document.querySelector("h2")?.textContent?.trim() ||
-        document.querySelector("[data-subtitle]")?.textContent?.trim() ||
-        "";
-
-      render({
-        title: wfTitle,
-        subtitle: wfSubtitle,
-        bannerWide,
-        bannerSquare,
-        bannerUrl: bannerUrl || CFG.FALLBACK_SPONSOR_URL,
-        bannerCaption: sponsored ? "" : (row?.text || "")
-      });
-
-      // Emit event for other scripts
+      // Emit event
       window.dispatchEvent(new CustomEvent("ulydia:sponsor-ready", {
-        detail: { sponsored, payload: sponsor, metier, geo: { ...geo, lang: finalLang }, countriesRow: row }
+        detail: { sponsored, payload, metier, geo, countriesRow }
       }));
 
-      log("done", { sponsored, finalLang, bannerWide: !!bannerWide, bannerSquare: !!bannerSquare });
+      log("done", {
+        sponsored,
+        finalLang: geo.lang,
+        bannerWide: !!(sponsored ? sponsorBanners?.wide : countriesRow?.wide),
+        bannerSquare: !!(sponsored ? sponsorBanners?.square : countriesRow?.square),
+      });
+
     } catch (e) {
       console.error("[metier-page] fatal", e);
+      window.SPONSORED_ACTIVE = false;
+      // fallback: show non-sponsored
+      show(document.getElementById(ID_SPONSORED), false);
+      show(document.getElementById(ID_NOT_SPONSORED), true);
+    } finally {
+      document.documentElement.classList.remove("ul-sponsor-loading");
     }
   })();
 })();
-
