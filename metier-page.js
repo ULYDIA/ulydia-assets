@@ -57,18 +57,31 @@ async function waitForSrc(el, timeoutMs = 2500){
   return "";
 }
 
+// ⬇️ à mettre UNE FOIS dans le fichier (au-dessus), si pas déjà présent
+function findRoleElLoose(item, role){
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const wanted = norm(role);
+  if(!wanted) return null;
+  return [...item.querySelectorAll("[data-role]")].find(el => {
+    return norm(el.getAttribute("data-role")) === wanted;
+  }) || null;
+}
+
 async function readCountryRowByDataRole(root, iso){
   const key = String(iso||"").trim().toUpperCase();
   const items = Array.from(root.querySelectorAll(".w-dyn-item, [role='listitem'], .w-dyn-items > *"));
+
   for(const it of items){
-    const isoEl = it.querySelector('[data-role="iso"]');
+    // ✅ ISO
+    const isoEl = findRoleElLoose(it, "iso"); // tolère iso / ISO / iso-code etc si tu changes un jour
     const itemIso = (isoEl?.textContent || "").trim().toUpperCase();
     if(itemIso !== key) continue;
 
-    const wideEl = it.querySelector('[data-role="img1"]');
-    const squareEl = it.querySelector('[data-role="img2"]');
+    // ✅ IMAGES
+    const wideEl   = findRoleElLoose(it, "img1");
+    const squareEl = findRoleElLoose(it, "img2");
 
-    // try immediate, then wait (lazy)
+    // try immediate, then wait
     let wide = getImgSrc(wideEl);
     let square = getImgSrc(squareEl);
 
@@ -79,6 +92,7 @@ async function readCountryRowByDataRole(root, iso){
   }
   return null;
 }
+
   function pickUrl(v){ if(!v) return ""; if(typeof v==="string") return safeUrl(v); if(typeof v==="object") return safeUrl(v.url||v.value||""); return ""; }
   function normalizeLang(l){ const s=String(l||"").trim().toLowerCase(); return (s ? (s.split("-")[0]||CFG.DEFAULT_LANG) : CFG.DEFAULT_LANG); }
   function getFinalLang(){ return normalizeLang(qp("lang") || document.body?.getAttribute("data-lang") || document.documentElement?.lang || CFG.DEFAULT_LANG); }
@@ -187,6 +201,30 @@ function extractImgUrl(el){
   const m = bg.match(/url\(["']?(.*?)["']?\)/i);
   return m ? m[1] : "";
 }
+
+
+function findRoleEl(item, role){
+  const wanted = String(role || "").trim().toLowerCase();
+  if(!wanted) return null;
+
+  return [...item.querySelectorAll("[data-role]")].find(el => {
+    const v = (el.getAttribute("data-role") || "").trim().toLowerCase();
+    return v === wanted;
+  }) || null;
+}
+
+// version tolérante : img1 / img-1 / IMG_1 / image1
+function findRoleElLoose(item, role){
+  const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const wanted = norm(role);
+  if(!wanted) return null;
+
+  return [...item.querySelectorAll("[data-role]")].find(el => {
+    return norm(el.getAttribute("data-role")) === wanted;
+  }) || null;
+}
+
+
 
 
 function readCountryRow(iso){
