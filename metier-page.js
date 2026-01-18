@@ -758,12 +758,16 @@ async function resolveBanners(meta, finalLang) {
     const okWide = await preloadImage(wideUrl);
     const okSq   = await preloadImage(squareUrl);
 
-    return {
+    // NOTE: avoid data: fallbacks (can be blocked by CSP). If image missing,
+    // UI.setBanner will render a CSS fallback.
+    const out = {
       mode: "sponsor",
-      wideUrl: okWide ? wideUrl : svgBannerDataUrl("Ulydia", "Sponsor"),
-      squareUrl: okSq ? squareUrl : svgBannerDataUrl("Ulydia", "Sponsor"),
+      wideUrl: okWide ? wideUrl : "",
+      squareUrl: okSq ? squareUrl : "",
       link: sponsorLink,
     };
+    if (DEBUG) log("banners sponsor", { okWide, okSq, wideUrl: !!out.wideUrl, squareUrl: !!out.squareUrl, sponsorLink: !!sponsorLink });
+    return out;
   }
 
   // House
@@ -775,12 +779,14 @@ async function resolveBanners(meta, finalLang) {
   const okWide = await preloadImage(houseWide);
   const okSq = await preloadImage(houseSq);
 
-  return {
+  const out = {
     mode: "house",
-    wideUrl: okWide ? houseWide : svgBannerDataUrl("Ulydia", t.sponsored_by ? "Sponsoriser cette fiche" : "Sponsoriser cette fiche"),
-    squareUrl: okSq ? houseSq : svgBannerDataUrl("Ulydia", "Sponsoriser"),
+    wideUrl: okWide ? houseWide : "",
+    squareUrl: okSq ? houseSq : "",
     link,
   };
+  if (DEBUG) log("banners house", { finalLang, okWide, okSq, houseWide, houseSq, link });
+  return out;
 }
 
   // =========================================================
@@ -841,12 +847,13 @@ async function resolveBanners(meta, finalLang) {
       `;
     }
 
-    function setBanner(anchor, imgUrl, link, external) {
+    function setBanner(anchor, imgUrl, link, external, fallbackText) {
       if (!anchor) return;
-      const img = anchor.querySelector("img");
-      if (imgUrl) img.setAttribute("src", imgUrl);
 
+      const img = anchor.querySelector("img");
       const href = safeUrl(link);
+
+      // Link
       if (href) {
         anchor.href = href;
         if (external) {
@@ -860,6 +867,50 @@ async function resolveBanners(meta, finalLang) {
       } else {
         anchor.removeAttribute("href");
         anchor.style.pointerEvents = "none";
+      }
+
+      const url = safeUrl(imgUrl);
+
+      // ✅ Image OK
+      if (url) {
+        if (img) {
+          img.style.display = "block";
+          img.style.opacity = "1";
+          img.setAttribute("src", url);
+        }
+        // clear fallback
+        anchor.style.background = "rgba(255,255,255,0.03)";
+        const ft = anchor.querySelector(".ul-fallback-text");
+        if (ft) ft.remove();
+        anchor.removeAttribute("data-ul-fallback");
+        return;
+      }
+
+      // ✅ No image => CSP-safe fallback background (no data:)
+      if (img) {
+        img.removeAttribute("src");
+        img.style.opacity = "0";
+      }
+      anchor.setAttribute("data-ul-fallback", "1");
+      anchor.style.background = "linear-gradient(135deg, rgba(11,16,32,0.92), rgba(100,108,253,0.55))";
+      anchor.style.position = "relative";
+
+      if (!anchor.querySelector(".ul-fallback-text")) {
+        const div = document.createElement("div");
+        div.className = "ul-fallback-text";
+        div.style.position = "absolute";
+        div.style.inset = "auto 14px 14px 14px";
+        div.style.padding = "10px 12px";
+        div.style.borderRadius = "999px";
+        div.style.border = "1px solid rgba(255,255,255,0.16)";
+        div.style.background = "rgba(0,0,0,0.35)";
+        div.style.fontWeight = "900";
+        div.style.fontSize = "13px";
+        div.style.display = "inline-flex";
+        div.style.alignItems = "center";
+        div.style.gap = "8px";
+        div.innerHTML = `<span style="width:9px;height:9px;border-radius:99px;background:#646cfd;box-shadow:0 0 0 3px rgba(100,108,253,0.20)"></span><span>${esc(fallbackText || "Sponsoriser cette fiche")}</span>`;
+        anchor.appendChild(div);
       }
     }
 
@@ -1010,8 +1061,8 @@ async function resolveBanners(meta, finalLang) {
       const wideA = root.querySelector('.ul-banner-wide');
       const squareA = root.querySelector('.ul-banner-square');
       const external = banners?.mode === "sponsor";
-      setBanner(wideA, banners?.wideUrl, banners?.link, external);
-      setBanner(squareA, banners?.squareUrl, banners?.link, external);
+      setBanner(wideA, banners?.wideUrl, banners?.link, external, "Sponsoriser cette fiche");
+      setBanner(squareA, banners?.squareUrl, banners?.link, external, "Sponsoriser");
 
       // overlay badge if sponsored
       if (banners?.mode === "sponsor" && model?.meta?.sponsor) {
@@ -1080,6 +1131,51 @@ async function resolveBanners(meta, finalLang) {
   })();
 
   // =========================================================
+  // 8.5) MODEL MERGE (worker meta + CMS content fallback)
+  // =========================================================
+  function isEmptyVal(v){
+    if (Array.isArray(v)) return v.length === 0;
+    return !String(v || "").trim();
+  }
+
+  function mergeModels(worker, cms){
+    if (!worker && !cms) return null;
+    if (!worker) return cms;
+    if (!cms) return worker;
+
+    // deep clone worker as base
+    const out = JSON.parse(JSON.stringify(worker));
+    out.meta = out.meta || worker.meta || { sponsored:false, sponsor:null };
+
+    // metier
+    out.metier = out.metier || {};
+    const wm = out.metier;
+    const cm = cms.metier || {};
+
+    const fillStr = (k) => { if (isEmptyVal(wm[k])) wm[k] = String(cm[k] || ""); };
+    const fillArr = (k) => { if (isEmptyVal(wm[k])) wm[k] = Array.isArray(cm[k]) ? cm[k] : []; };
+
+    fillStr("title");
+    fillStr("description");
+    fillArr("missions");
+    fillArr("competences");
+    fillArr("environnements");
+    fillArr("evolutions");
+
+    // country specific
+    out.country_specific = out.country_specific || {};
+    const wcs = out.country_specific;
+    const ccs = cms.country_specific || {};
+    if (isEmptyVal(wcs.text)) wcs.text = String(ccs.text || "");
+    if (isEmptyVal(wcs.blocks)) wcs.blocks = Array.isArray(ccs.blocks) ? ccs.blocks : [];
+
+    // faq
+    if (isEmptyVal(out.faq)) out.faq = Array.isArray(cms.faq) ? cms.faq : [];
+
+    return out;
+  }
+
+  // =========================================================
   // 9) BOOTSTRAP
   // =========================================================
   async function main() {
@@ -1107,8 +1203,8 @@ async function resolveBanners(meta, finalLang) {
     // CMS fallback
     const cmsModel = cmsToModel(readCmsPayload());
 
-    // Merge policy: worker wins; fallback to cms if worker missing
-    const model = workerModel || cmsModel || {
+    // Merge policy: keep worker meta (sponsor), but fill empty content from CMS
+    const model = mergeModels(workerModel, cmsModel) || {
       meta: { sponsored: false, sponsor: null },
       metier: { title: slug, description: "", missions: [], competences: [], environnements: [], evolutions: [] },
       country_specific: { text: "", blocks: [] },
@@ -1117,6 +1213,18 @@ async function resolveBanners(meta, finalLang) {
 
     // Ensure meta exists
     model.meta = model.meta || { sponsored: false, sponsor: null };
+
+    if (DEBUG) {
+      log("MODEL FINAL", {
+        title: model?.metier?.title,
+        desc: String(model?.metier?.description || "").slice(0, 80),
+        missions: model?.metier?.missions?.length || 0,
+        competences: model?.metier?.competences?.length || 0,
+        environnements: model?.metier?.environnements?.length || 0,
+        evolutions: model?.metier?.evolutions?.length || 0,
+        country_text: !!String(model?.country_specific?.text || "").trim(),
+      });
+    }
 
     // Banners resolution
     const banners = await resolveBanners(model.meta, finalLang);
