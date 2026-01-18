@@ -666,3 +666,237 @@
 
 
 
+
+
+
+
+// =========================================================
+// Ulydia — Metier Page PATCH (CMS fallback + default banners by final language)
+// =========================================================
+
+// 1) détecte la "langue finale" (priorité : data-lang -> <html lang> -> ?lang -> DEFAULT)
+function getFinalLang(DEFAULT_LANG = "en") {
+  const byAttr =
+    document.body?.getAttribute("data-lang") ||
+    document.documentElement?.getAttribute("data-lang") ||
+    "";
+  const byHtml = document.documentElement?.lang || "";
+  const byQP = (new URLSearchParams(location.search).get("lang") || "").trim();
+  const lang = (byAttr || byHtml || byQP || DEFAULT_LANG).toLowerCase();
+  // normalise fr-FR -> fr
+  return lang.split("-")[0] || DEFAULT_LANG;
+}
+
+// 2) lit le payload CMS (tes 21 champs) : <div id="ul_cms_payload">... data-ul-f="description" ...
+function readCmsPayload() {
+  const root = document.getElementById("ul_cms_payload");
+  if (!root) return null;
+
+  const nodes = root.querySelectorAll("[data-ul-f]");
+  if (!nodes?.length) return null;
+
+  const out = {};
+  nodes.forEach((n) => {
+    const key = (n.getAttribute("data-ul-f") || "").trim();
+    if (!key) return;
+
+    // Si c'est une liste (li), ou un bloc texte, on prend le texte "propre"
+    const txt = (n.textContent || "").trim();
+    if (!txt || txt === "-" || txt === "—") return;
+
+    // si plusieurs éléments ont le même data-ul-f => tableau
+    if (out[key] === undefined) out[key] = txt;
+    else if (Array.isArray(out[key])) out[key].push(txt);
+    else out[key] = [out[key], txt];
+  });
+
+  return out;
+}
+
+// 3) mapping des clés CMS -> sections
+function cmsToSections(cms) {
+  if (!cms) return null;
+
+  // adapte ces clés à TES data-ul-f réels
+  // (garde ça souple : si une clé n'existe pas, elle est ignorée)
+  const sections = {
+    description: cms.description || cms.desc || "",
+    missions: Array.isArray(cms.missions) ? cms.missions : (cms.missions ? [cms.missions] : []),
+    competences: Array.isArray(cms.competences) ? cms.competences : (cms.competences ? [cms.competences] : []),
+    environnements: Array.isArray(cms.environnements) ? cms.environnements : (cms.environnements ? [cms.environnements] : []),
+    evolutions: Array.isArray(cms.evolutions) ? cms.evolutions : (cms.evolutions ? [cms.evolutions] : []),
+    specifique_pays: cms.specifique_pays || cms.country_specific || ""
+  };
+
+  // nettoie
+  Object.keys(sections).forEach((k) => {
+    const v = sections[k];
+    if (typeof v === "string") sections[k] = v.trim();
+    if (Array.isArray(v)) sections[k] = v.map(x => String(x||"").trim()).filter(Boolean);
+  });
+
+  return sections;
+}
+
+// 4) rend une section dans ton UI existant (tu adaptes juste les sélecteurs)
+//    -> tu as déjà des tabs "Description / Missions / Compétences / Environnements / Évolutions / Spécifique pays"
+//    -> il faut un conteneur de contenu (ex: #ul_content_body ou .ul-content-body)
+function renderSectionIntoUI(sectionKey, sections) {
+  const body =
+    document.querySelector("#ul_content_body") ||
+    document.querySelector(".ul-content-body") ||
+    document.querySelector('[data-ul="content-body"]');
+
+  if (!body) return;
+
+  const v = sections?.[sectionKey];
+
+  // vide
+  body.innerHTML = "";
+
+  if (!v || (Array.isArray(v) && v.length === 0)) {
+    body.innerHTML = `<div style="color:#6b7280;font-weight:700;">—</div>`;
+    return;
+  }
+
+  if (Array.isArray(v)) {
+    const ul = document.createElement("ul");
+    ul.style.margin = "0";
+    ul.style.paddingLeft = "18px";
+    v.forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = item;
+      li.style.margin = "6px 0";
+      ul.appendChild(li);
+    });
+    body.appendChild(ul);
+  } else {
+    const p = document.createElement("div");
+    p.textContent = v;
+    p.style.whiteSpace = "pre-wrap";
+    p.style.lineHeight = "1.6";
+    body.appendChild(p);
+  }
+}
+
+// 5) connecte les tabs à renderSectionIntoUI (si tu n’as pas déjà un handler)
+function wireTabs(sections) {
+  const tabMap = {
+    "description": "description",
+    "missions": "missions",
+    "compétences": "competences",
+    "competences": "competences",
+    "environnements": "environnements",
+    "évolutions": "evolutions",
+    "evolutions": "evolutions",
+    "spécifique pays": "specifique_pays",
+    "specifique pays": "specifique_pays"
+  };
+
+  const tabs =
+    document.querySelectorAll("[data-ul-tab]")?.length
+      ? document.querySelectorAll("[data-ul-tab]")
+      : document.querySelectorAll("button"); // fallback si tu n’as pas d’attribut
+
+  tabs.forEach((btn) => {
+    const label = (btn.textContent || "").trim().toLowerCase();
+    const key = tabMap[label];
+    if (!key) return;
+
+    btn.addEventListener("click", () => {
+      renderSectionIntoUI(key, sections);
+    });
+  });
+
+  // rendu par défaut
+  renderSectionIntoUI("description", sections);
+}
+
+// 6) bannières par défaut (non sponsorisé) selon langue finale
+function setDefaultBannersIfNotSponsored({ sponsored, lang }) {
+  if (sponsored) return;
+
+  // ⚠️ mets ici TES URLs de bannières Ulydia “house ads” par langue
+  const DEFAULT_BANNERS = {
+    fr: { wide: "https://ulydia-assets.pages.dev/banners/fr-wide.png", square: "https://ulydia-assets.pages.dev/banners/fr-square.png", link: "/sponsorship" },
+    en: { wide: "https://ulydia-assets.pages.dev/banners/en-wide.png", square: "https://ulydia-assets.pages.dev/banners/en-square.png", link: "/sponsorship" },
+    de: { wide: "https://ulydia-assets.pages.dev/banners/de-wide.png", square: "https://ulydia-assets.pages.dev/banners/de-square.png", link: "/sponsorship" },
+    es: { wide: "https://ulydia-assets.pages.dev/banners/es-wide.png", square: "https://ulydia-assets.pages.dev/banners/es-square.png", link: "/sponsorship" },
+    it: { wide: "https://ulydia-assets.pages.dev/banners/it-wide.png", square: "https://ulydia-assets.pages.dev/banners/it-square.png", link: "/sponsorship" }
+  };
+
+  const pack = DEFAULT_BANNERS[lang] || DEFAULT_BANNERS.en;
+
+  // adapte les sélecteurs aux éléments réels de ta colonne sponsor
+  const wideImg =
+    document.querySelector("#ul_banner_wide") ||
+    document.querySelector('[data-ul="banner-wide"] img') ||
+    document.querySelector(".ul-banner-wide img");
+
+  const squareImg =
+    document.querySelector("#ul_banner_square") ||
+    document.querySelector('[data-ul="banner-square"] img') ||
+    document.querySelector(".ul-banner-square img");
+
+  // lien (si tes images sont dans un <a>)
+  const setLink = (img) => {
+    if (!img) return;
+    const a = img.closest("a");
+    if (!a) return;
+    a.href = pack.link || "/sponsorship";
+    a.target = "_self";
+    a.rel = "";
+    a.style.pointerEvents = "auto";
+  };
+
+  if (wideImg) { wideImg.src = pack.wide; wideImg.style.display = ""; setLink(wideImg); }
+  if (squareImg) { squareImg.src = pack.square; squareImg.style.display = ""; setLink(squareImg); }
+
+  // si tu avais “caché” tout le bloc sponsor quand non sponsorisé, on force l’affichage
+  const sponsorCol =
+    document.querySelector("#ul_sponsor_col") ||
+    document.querySelector('[data-ul="sponsor-col"]') ||
+    document.querySelector(".ul-sponsor-col");
+  if (sponsorCol) sponsorCol.style.display = "";
+}
+
+// =========================================================
+// ENTRYPOINT : à appeler après ton fetch Worker (ou même sans Worker)
+// =========================================================
+function applyMetierPageFallback({ workerData } = {}) {
+  const lang = getFinalLang("en");
+
+  // 1) sponsor state depuis worker si dispo
+  const sponsored = !!(workerData?.sponsored || workerData?.is_sponsored);
+
+  // 2) Contenu : si worker ne donne pas metier.*, on lit le CMS payload
+  const hasWorkerContent =
+    !!workerData?.metier?.description ||
+    (Array.isArray(workerData?.metier?.missions) && workerData.metier.missions.length);
+
+  let sections = null;
+
+  if (hasWorkerContent) {
+    sections = {
+      description: (workerData.metier.description || "").trim(),
+      missions: Array.isArray(workerData.metier.missions) ? workerData.metier.missions : [],
+      competences: Array.isArray(workerData.metier.skills) ? workerData.metier.skills : [],
+      environnements: Array.isArray(workerData.metier.environments) ? workerData.metier.environments : [],
+      evolutions: Array.isArray(workerData.metier.evolutions) ? workerData.metier.evolutions : [],
+      specifique_pays: (workerData.metier.country_specific?.text || workerData.country_specific?.text || "").trim()
+    };
+  } else {
+    const cms = readCmsPayload();
+    sections = cmsToSections(cms);
+  }
+
+  if (sections) {
+    wireTabs(sections);
+  }
+
+  // 3) Bannières : si non sponsorisé => house ads localisées (lang finale)
+  setDefaultBannersIfNotSponsored({ sponsored, lang });
+}
+
+
+
