@@ -383,6 +383,9 @@ html.ul-metier-dark, html.ul-metier-dark body{
     // Ajuste si besoin selon ta structure.
     const root = document.getElementById("ulydia-metier-root");
     const keep = new Set([root]);
+const countriesData = document.getElementById("countriesData");
+if (countriesData) keep.add(countriesData);
+
 
     // Essaye de garder navbar/footer Webflow s’ils existent
     const nav = document.querySelector("header, .w-nav, .navbar, [data-ul-keep='nav']");
@@ -452,6 +455,18 @@ html.ul-metier-dark, html.ul-metier-dark body{
     }
 
     return out.length ? out : null;
+
+    // DEBUG helpers (console)
+    try{
+    window.getCountryBanner = (iso, kind) => {
+        const row = pickCountryRow(String(iso||"").toUpperCase());
+        if (!row) return "";
+        return (kind === "wide" ? row.wide : row.square) || "";
+    };
+    window.__METIER_PAGE_VERSION__ = window.__METIER_PAGE_VERSION__ || "vX";
+    }catch{}
+
+
   }
 
   function pickCountryRow(countryISO){
