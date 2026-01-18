@@ -1,36 +1,21 @@
 <script>
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V3__) return;
-  window.__ULYDIA_METIER_PAGE_V3__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V5__) return;
+  window.__ULYDIA_METIER_PAGE_V5__ = true;
 
-  // =========================
-  // CONFIG
-  // =========================
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
-  const ENDPOINT = "/sponsor-info"; // ton endpoint OK
+  const ENDPOINT     = "/sponsor-info";
 
-  // Cache (évite attente et évite flash non-sponsor)
-  const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
-  const CACHE_PREFIX = "ul_sponsor_v1:";
-
-  // Blocks (présents dans ta page)
   const ID_SPONSORED_BLOCK     = "block-sponsored";
   const ID_NOT_SPONSORED_BLOCK = "block-not-sponsored";
 
-  // =========================
-  // HELPERS
-  // =========================
   const qp = (name) => new URLSearchParams(location.search).get(name);
   const apiBase = () => String(WORKER_URL || "").replace(/\/$/, "");
   const $id = (id) => document.getElementById(id);
 
-  function normIso(v){
-    return String(v || "").trim().toUpperCase().replace(/[^A-Z]/g, "");
-  }
-  function normLang(v){
-    return String(v || "").trim().toLowerCase().split("-")[0];
-  }
+  function normIso(v){ return String(v || "").trim().toUpperCase().replace(/[^A-Z]/g, ""); }
+  function normLang(v){ return String(v || "").trim().toLowerCase().split("-")[0]; }
 
   function show(el, yes){
     if (!el) return;
@@ -58,10 +43,9 @@
   function setLinkOnSponsorAnchors(url){
     if (!url) return;
     const nodes = [
-      ...document.querySelectorAll('#block-sponsored a'),
+      ...document.querySelectorAll("#block-sponsored a"),
       ...document.querySelectorAll('[data-role="sponsor-link"]'),
       ...document.querySelectorAll('[data-sponsor-link="true"]'),
-      ...document.querySelectorAll('a[data-action="sponsor"]'),
     ];
     nodes.forEach(a => {
       try{
@@ -73,15 +57,6 @@
     });
   }
 
-  function decided(){
-    window.__ULYDIA_SPONSOR_DECIDED__ = true;
-    try { document.documentElement.classList.remove("ul-sponsor-loading"); } catch(e){}
-    hidePlaceholder();
-  }
-
-  // =========================
-  // Placeholder neutre (pas de non-sponsor flash)
-  // =========================
   function ensurePlaceholder(){
     if (document.getElementById("ul_sponsor_placeholder")) return;
 
@@ -91,14 +66,12 @@
 
     const ph = document.createElement("div");
     ph.id = "ul_sponsor_placeholder";
-    ph.innerHTML = `
-      <div class="ph-row"></div>
-      <div class="ph-row"></div>
-    `;
-    // on le met avant les blocks si possible
+    ph.innerHTML = `<div class="ph-row"></div><div class="ph-row"></div>`;
+
     try{
       if (sp) parent.insertBefore(ph, sp);
-      else parent.insertBefore(ph, ns);
+      else if (ns) parent.insertBefore(ph, ns);
+      else parent.prepend(ph);
     }catch(e){
       parent.prepend(ph);
     }
@@ -109,9 +82,11 @@
     if (ph) ph.style.display = "none";
   }
 
-  // =========================
-  // CONTEXT
-  // =========================
+  function decided(){
+    hidePlaceholder();
+    try { document.documentElement.classList.remove("ul-sponsor-loading"); } catch(e){}
+  }
+
   function findMetierSlug(){
     const fromQP = (qp("metier") || "").trim();
     if (fromQP) return fromQP;
@@ -129,57 +104,30 @@
     return parts[parts.length - 1] || "";
   }
 
-  function getCountry(){
+  function getCountryInstant(){
+    // IMPORTANT: on regarde aussi DOM/param pour éviter US fallback
     return (
       normIso(window.VISITOR_COUNTRY) ||
       normIso(qp("country")) ||
       normIso($id("country-iso")?.textContent) ||
-      "US"
+      ""
     );
   }
 
   function getLang(){
-    return (
-      normLang(window.VISITOR_LANG) ||
-      normLang(qp("lang")) ||
-      normLang($id("country-lang")?.textContent) ||
-      "en"
-    );
+    return normLang(window.VISITOR_LANG) || normLang(qp("lang")) || normLang($id("country-lang")?.textContent) || "en";
   }
 
-  // =========================
-  // CACHE
-  // =========================
-  function cacheKey(metier, country){
-    return `${CACHE_PREFIX}${metier}::${country}`;
-  }
-
-  function readCache(metier, country){
-    try{
-      const raw = sessionStorage.getItem(cacheKey(metier, country));
-      if (!raw) return null;
-      const obj = JSON.parse(raw);
-      if (!obj || !obj.ts) return null;
-      if ((Date.now() - obj.ts) > CACHE_TTL_MS) return null;
-      return obj;
-    }catch(e){
-      return null;
+  async function waitForCountry(maxMs=1200){
+    const t0 = Date.now();
+    let c = getCountryInstant();
+    while (!c && (Date.now() - t0) < maxMs){
+      await new Promise(r => setTimeout(r, 60));
+      c = getCountryInstant();
     }
+    return c || "US"; // dernier recours
   }
 
-  function writeCache(metier, country, info){
-    try{
-      sessionStorage.setItem(cacheKey(metier, country), JSON.stringify({
-        ts: Date.now(),
-        sponsored: !!info?.sponsored,
-        sponsor: info?.sponsor || {}
-      }));
-    }catch(e){}
-  }
-
-  // =========================
-  // FETCH sponsor info (POST JSON)
-  // =========================
   async function fetchSponsorInfo(metier, country, lang){
     const url = apiBase() + ENDPOINT;
     const headers = { "content-type":"application/json" };
@@ -196,42 +144,36 @@
     let data = null;
     try { data = JSON.parse(txt); } catch(e){}
 
-    if (!res.ok) return null;
-    if (!data || typeof data !== "object") return null;
+    if (!res.ok || !data) return null;
 
     const sponsored = !!data.sponsored;
     const sponsorObj = data.sponsor || {};
     return {
       sponsored,
       sponsor: {
-        link: String(sponsorObj.link || "").trim(),
+        link:   String(sponsorObj.link || "").trim(),
         logo_1: pickUrl(sponsorObj.logo_1),
         logo_2: pickUrl(sponsorObj.logo_2),
-        name: String(sponsorObj.name || "").trim()
+        name:   String(sponsorObj.name || "").trim(),
       }
     };
   }
 
-  // =========================
-  // APPLY UI
-  // =========================
   function apply(info){
-    const blockSponsored    = $id(ID_SPONSORED_BLOCK);
-    const blockNotSponsored = $id(ID_NOT_SPONSORED_BLOCK);
+    const sp = $id(ID_SPONSORED_BLOCK);
+    const ns = $id(ID_NOT_SPONSORED_BLOCK);
 
     const sponsored = !!info?.sponsored;
 
-    if (sponsored) {
-      // sponsor
-      show(blockNotSponsored, false);
-      show(blockSponsored, true);
+    if (sponsored){
+      show(ns, false);
+      show(sp, true);
 
       const sponsor = info.sponsor || {};
       const link = String(sponsor.link || "").trim();
 
-      // ⚠️ tes images n'ont pas ids sponsor-logo-1/2 => on cible les images dans le block sponsor
-      // 1) on prend 2 images distinctes dans le block sponsor (ordre DOM)
-      const imgs = blockSponsored ? Array.from(blockSponsored.querySelectorAll("img")) : [];
+      // tes <img> n'ont pas d'id sponsor-logo-1/2 => on prend les images du block sponsor
+      const imgs = sp ? Array.from(sp.querySelectorAll("img")) : [];
       const img1 = imgs[0] || null;
       const img2 = imgs[1] || imgs[0] || null;
 
@@ -239,67 +181,54 @@
       if (sponsor.logo_2 && img2) setImgHard(img2, sponsor.logo_2);
 
       if (link) setLinkOnSponsorAnchors(link);
-
     } else {
-      // non sponsor
-      show(blockSponsored, false);
-      show(blockNotSponsored, true);
+      show(sp, false);
+      show(ns, true);
     }
 
     decided();
   }
 
-  // =========================
-  // BOOT
-  // =========================
-  (async function boot(){
-    const metier = findMetierSlug();
-    const country = getCountry();
-    const lang = getLang();
+  function onReady(fn){
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn, { once:true });
+    else fn();
+  }
 
-    // Toujours : on met un placeholder neutre (pas la non-sponsor)
+  onReady(async () => {
     ensurePlaceholder();
 
-    // 1) Cache instantané (évite le délai ET évite flash non-sponsor)
-    const cached = readCache(metier, country);
-    if (cached) {
-      apply({ sponsored: cached.sponsored, sponsor: cached.sponsor });
-      // refresh silencieux en arrière-plan
-      fetchSponsorInfo(metier, country, lang).then(fresh => {
-        if (!fresh) return;
-        writeCache(metier, country, fresh);
-        // Si c'est différent, on met à jour (rare)
-        if (!!fresh.sponsored !== !!cached.sponsored || String(fresh?.sponsor?.logo_2||"") !== String(cached?.sponsor?.logo_2||"")) {
-          apply(fresh);
-        }
-      }).catch(()=>{});
+    const metier = findMetierSlug();
+    const lang   = getLang();
+
+    if (!metier){
+      apply({ sponsored:false, sponsor:{} });
       return;
     }
 
-    // 2) Pas de cache : on fetch et on affiche DIRECT la bonne (sans montrer non-sponsor avant)
-    const timeout = setTimeout(() => {
-      // fallback rare : si Worker trop lent -> on montre non-sponsor (mais après 2.5s)
-      if (window.__ULYDIA_SPONSOR_DECIDED__) return;
-      apply({ sponsored:false, sponsor:{} });
-    }, 2500);
+    // ✅ attend le country (FR) avant de décider
+    let country = await waitForCountry(1200);
 
-    try{
-      const info = await fetchSponsorInfo(metier, country, lang);
-      clearTimeout(timeout);
+    // 1) fetch normal
+    let info = await fetchSponsorInfo(metier, country, lang);
 
-      if (!info) {
-        apply({ sponsored:false, sponsor:{} });
-        return;
+    // ✅ si on a dû fallback US et que ça dit non sponsor -> re-essaye quand VISITOR_COUNTRY arrive
+    if ((!info || !info.sponsored) && country === "US"){
+      // petit délai pour laisser VISITOR_COUNTRY se remplir
+      await new Promise(r => setTimeout(r, 450));
+      const late = getCountryInstant();
+      if (late && late !== "US"){
+        country = late;
+        info = await fetchSponsorInfo(metier, country, lang);
       }
-
-      writeCache(metier, country, info);
-      apply(info);
-
-    }catch(e){
-      clearTimeout(timeout);
-      apply({ sponsored:false, sponsor:{} });
     }
-  })();
+
+    if (!info){
+      apply({ sponsored:false, sponsor:{} });
+      return;
+    }
+
+    apply(info);
+  });
 
 })();
 </script>
