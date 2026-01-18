@@ -17,7 +17,7 @@
 
 (() => {
   // ✅ version visible dans la console
-  window.__METIER_PAGE_VERSION__ = "v4.1";
+  window.__METIER_PAGE_VERSION__ = "v4.2";
 
   if (window.__ULYDIA_METIER_PAGE_V4__) return;
   window.__ULYDIA_METIER_PAGE_V4__ = true;
@@ -36,13 +36,8 @@
     JOB_SEGMENT: "fiche-metiers", // for slugFromPath()
 
     // House banners by lang (used when NOT sponsored)
-    HOUSE_BANNERS: {
-      fr: { wide: "https://ulydia-assets.pages.dev/banners/fr-wide.png", square: "https://ulydia-assets.pages.dev/banners/fr-square.png", link: "/sponsorship" },
-      en: { wide: "https://ulydia-assets.pages.dev/banners/en-wide.png", square: "https://ulydia-assets.pages.dev/banners/en-square.png", link: "/sponsorship" },
-      de: { wide: "https://ulydia-assets.pages.dev/banners/de-wide.png", square: "https://ulydia-assets.pages.dev/banners/de-square.png", link: "/sponsorship" },
-      es: { wide: "https://ulydia-assets.pages.dev/banners/es-wide.png", square: "https://ulydia-assets.pages.dev/banners/es-square.png", link: "/sponsorship" },
-      it: { wide: "https://ulydia-assets.pages.dev/banners/it-wide.png", square: "https://ulydia-assets.pages.dev/banners/it-square.png", link: "/sponsorship" },
-    },
+HOUSE_BANNERS: {}, // ⛔ désactivé définitivement
+
 
     // UI labels (simple i18n)
     LABELS: {
@@ -107,6 +102,33 @@
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
   const qp = (name) => new URLSearchParams(location.search).get(name);
+
+// =====================================================
+// COUNTRY CMS (countriesData) — NON SPONSORED BANNERS
+// =====================================================
+function getCountryRowByISO(iso){
+  const rows = document.querySelectorAll("#countriesData .w-dyn-item");
+  const target = String(iso || "").trim().toUpperCase();
+  for (const row of rows) {
+    const isoEl = row.querySelector(".iso-code") || row.querySelector("[data-iso-code]");
+    const rowISO = isoEl?.textContent?.trim().toUpperCase();
+    if (rowISO === target) return row;
+  }
+  return null;
+}
+
+function getCountryBanner(iso, kind){
+  const row = getCountryRowByISO(iso);
+  if (!row) return "";
+  if (kind === "wide")   return row.querySelector("img.banner-img-1")?.src || "";
+  if (kind === "square") return row.querySelector("img.banner-img-2")?.src || "";
+  return "";
+}
+
+
+
+
+
 
   function apiBase() {
     return String(CFG.WORKER_URL || "").replace(/\/$/, "");
@@ -850,36 +872,33 @@ async function resolveBanners(meta, finalLang, countryISO) {
   // Sponsored
   if (meta?.sponsored && meta?.sponsor) {
     const sponsorLink = safeUrl(meta.sponsor.link || "");
-    const wideUrl = pickUrl(meta.sponsor.logo_2 || meta.sponsor.logo_wide || "");
-    const squareUrl = pickUrl(meta.sponsor.logo_1 || meta.sponsor.logo_square || "");
+    const wideUrl = pickUrl(meta?.sponsor?.logo_2 || meta?.sponsor?.logo_wide || "");
+    const squareUrl = pickUrl(meta?.sponsor?.logo_1 || meta?.sponsor?.logo_square || "");
 
     const okWide = await preloadImage(wideUrl);
-    const okSq   = await preloadImage(squareUrl);
+    const okSq = await preloadImage(squareUrl);
 
     return {
       mode: "sponsor",
-      wideUrl: okWide ? wideUrl : svgBannerDataUrl("Ulydia", "Sponsor"),
-      squareUrl: okSq ? squareUrl : svgBannerDataUrl("Ulydia", "Sponsor"),
+      wideUrl: okWide ? wideUrl : svgBannerDataUrl("Ulydia", "Sponsored"),
+      squareUrl: okSq ? squareUrl : svgBannerDataUrl("Ulydia", "Sponsored"),
       link: sponsorLink,
     };
   }
 
-  // House
-  const t = labels(finalLang);
-  const rowLang = pickCountryRow(countryISO)?.lang || "";
-  const effectiveLang = rowLang || finalLang;
-  const houseWide = getHouseBannerUrl("wide", effectiveLang, countryISO);
-  const houseSq = getHouseBannerUrl("square", effectiveLang, countryISO);
-  const link = getHouseLink(effectiveLang);
+  // Not sponsored → banners from Webflow CMS (collection: Pays) via #countriesData
+  const wide = pickUrl(getCountryBanner(countryISO, "wide"));
+  const square = pickUrl(getCountryBanner(countryISO, "square"));
+  log("house banners (country)", { countryISO, wide: !!wide, square: !!square });
 
-  const okWide = await preloadImage(houseWide);
-  const okSq = await preloadImage(houseSq);
+  const okWide = await preloadImage(wide);
+  const okSq = await preloadImage(square);
 
   return {
     mode: "house",
-    wideUrl: okWide ? houseWide : svgBannerDataUrl("Ulydia", t.sponsored_by ? "Sponsoriser cette fiche" : "Sponsoriser cette fiche"),
-    squareUrl: okSq ? houseSq : svgBannerDataUrl("Ulydia", "Sponsoriser"),
-    link,
+    wideUrl: okWide ? wide : svgBannerDataUrl("Ulydia", "Sponsoriser cette fiche"),
+    squareUrl: okSq ? square : svgBannerDataUrl("Ulydia", "Sponsoriser"),
+    link: "/sponsorship",
   };
 }
 
@@ -1184,6 +1203,7 @@ async function resolveBanners(meta, finalLang, countryISO) {
   // =========================================================
   async function main() {
     injectCSS();
+
 
     const root = UI.ensureRoot();
     UI.renderSkeleton(root);
