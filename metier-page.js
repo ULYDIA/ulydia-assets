@@ -1,13 +1,7 @@
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_PROD_V2__) return;
-  window.__ULYDIA_METIER_PAGE_PROD_V2__ = true;
+  if (window.__ULYDIA_METIER_PAGE_PROD_V3__) return;
+  window.__ULYDIA_METIER_PAGE_PROD_V3__ = true;
 
-  const DEBUG = !!window.__METIER_PAGE_DEBUG__;
-  const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
-
-  // =========================================================
-  // CONFIG
-  // =========================================================
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
   const SPONSOR_ENDPOINT = "/sponsor-info";
@@ -15,14 +9,11 @@
   const ID_SPONSORED_BLOCK     = "block-sponsored";
   const ID_NOT_SPONSORED_BLOCK = "block-not-sponsored";
 
-  // =========================================================
-  // HELPERS
-  // =========================================================
   const qp = (name) => new URLSearchParams(location.search).get(name);
-  const $ = (id) => document.getElementById(id);
+  const $  = (id) => document.getElementById(id);
   const apiBase = () => String(WORKER_URL || "").replace(/\/$/, "");
 
-  const normIso = (v) => String(v || "").trim().toUpperCase().replace(/[^A-Z]/g, "");
+  const normIso  = (v) => String(v || "").trim().toUpperCase().replace(/[^A-Z]/g, "");
   const normLang = (v) => String(v || "").trim().toLowerCase().split("-")[0];
 
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -86,12 +77,11 @@
   }
 
   function decided(){
-    document.documentElement.classList.remove("ul-sponsor-loading");
+    // ✅ retire les 2 classes possibles (ton bug venait de là)
+    try { document.documentElement.classList.remove("ul-sponsor-loading"); } catch(e){}
+    try { document.documentElement.classList.remove("ulydia-sponsor-loading"); } catch(e){}
   }
 
-  // =========================================================
-  // CONTEXT
-  // =========================================================
   function findMetierSlug(){
     const fromQP = (qp("metier") || "").trim();
     if (fromQP) return fromQP;
@@ -124,45 +114,40 @@
     );
   }
 
-  async function resolveGeo({ timeoutMs = 500 } = {}){
-    // 1) cache (accélère énormément les reload)
+  async function resolveGeo({ timeoutMs = 350 } = {}){
+    // cache (ultra rapide)
     try{
       const cached = JSON.parse(localStorage.getItem("ulydia_geo_v1") || "null");
       if (cached?.country) return { country: normIso(cached.country) || "US", lang: normLang(cached.lang) || "en" };
     }catch(e){}
 
-    // 2) immédiat si déjà dispo
+    // immédiat si déjà dispo
     let c = readCountryNow();
     let l = readLangNow();
-    if (c) {
+    if (c){
       try{ localStorage.setItem("ulydia_geo_v1", JSON.stringify({ country: c, lang: l || "en", ts: Date.now() })); }catch(e){}
       return { country: c, lang: l || "en" };
     }
 
-    // 3) attend un peu que ton footer remplisse VISITOR_COUNTRY
+    // attend un peu le footer (VISITOR_COUNTRY)
     const t0 = Date.now();
     while (Date.now() - t0 < timeoutMs){
-      await sleep(30);
+      await sleep(25);
       c = readCountryNow();
       l = readLangNow();
-      if (c) {
+      if (c){
         try{ localStorage.setItem("ulydia_geo_v1", JSON.stringify({ country: c, lang: l || "en", ts: Date.now() })); }catch(e){}
         return { country: c, lang: l || "en" };
       }
     }
 
-    // 4) fallback
     return { country: "US", lang: "en" };
   }
 
-  // =========================================================
-  // DOM mapping (BANNIÈRES DU BLOC SPONSORISÉ)
-  // =========================================================
   function getSponsoredBannerTargets(){
     const sponsoredBlock = $(ID_SPONSORED_BLOCK);
     if (!sponsoredBlock) return { b1: null, b2: null };
 
-    // Priorité : data-attrs si tu veux les ajouter
     const b1 =
       sponsoredBlock.querySelector('[data-sponsor-img="square"]') ||
       sponsoredBlock.querySelector("#sponsor-logo-1") ||
@@ -177,14 +162,11 @@
     return { b1, b2 };
   }
 
-  // =========================================================
-  // API sponsor-info
-  // =========================================================
   async function fetchSponsorInfo(metier, country, lang){
     const url = apiBase() + SPONSOR_ENDPOINT;
 
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 2500);
+    const timer = setTimeout(() => ctrl.abort(), 1800);
 
     try{
       const res = await fetch(url, {
@@ -206,59 +188,47 @@
       const txt = await res.text();
       let data = null;
       try { data = JSON.parse(txt); } catch(e) {}
-
-      return { ok: res.ok, status: res.status, data, txt };
+      return { ok: res.ok, status: res.status, data };
     } finally {
       clearTimeout(timer);
     }
   }
 
-  // =========================================================
-  // APPLY UI
-  // =========================================================
   async function applySponsorDecision(info){
     const blockSponsored = $(ID_SPONSORED_BLOCK);
     const blockNotSponsored = $(ID_NOT_SPONSORED_BLOCK);
 
     const sponsored = !!info?.sponsored;
+
+    // ✅ sticky verdict pour le footer
     window.SPONSORED_ACTIVE = sponsored;
+    window.__ULYDIA_SPONSOR_VERDICT__ = { sponsored, ts: Date.now() };
 
     if (sponsored){
       const sponsor = info?.sponsor || {};
-      const link = String(sponsor.link || "").trim();
+      const link  = String(sponsor.link || "").trim();
       const logo1 = pickUrl(sponsor.logo_1);
       const logo2 = pickUrl(sponsor.logo_2);
 
-      // IMPORTANT : on précharge AVANT d'afficher pour éviter "vide/flash"
       await Promise.all([ preloadImage(logo1), preloadImage(logo2) ]);
 
       show(blockNotSponsored, false);
       show(blockSponsored, true);
 
       const { b1, b2 } = getSponsoredBannerTargets();
-
       if (logo1) setImgHard(b1, logo1);
       if (logo2) setImgHard(b2, logo2);
 
       if (link){
         makeClickable(b1, link);
         makeClickable(b2, link);
-
-        // Bonus: si tu as d'autres liens "sponsor" connus
-        document.querySelectorAll('[data-role="sponsor-link"],[data-sponsor-link="true"],a[data-action="sponsor"]').forEach(a=>{
-          try{
-            a.href = link; a.target="_blank"; a.rel="noopener noreferrer";
-            a.style.pointerEvents="auto";
-          }catch(e){}
-        });
       }
-
     } else {
       show(blockSponsored, false);
       show(blockNotSponsored, true);
     }
 
-    // event utile
+    // event pour le footer
     try{
       window.dispatchEvent(new CustomEvent("ulydia:sponsor-ready", { detail: { sponsored, payload: info }}));
     }catch(e){}
@@ -266,14 +236,11 @@
     decided();
   }
 
-  // =========================================================
-  // BOOT
-  // =========================================================
   (async function boot(){
     const blockSponsored = $(ID_SPONSORED_BLOCK);
     const blockNotSponsored = $(ID_NOT_SPONSORED_BLOCK);
 
-    // sécurité : tant qu'on n'a pas décidé, on cache les 2 (anti-flash)
+    // tant que pas décidé => on cache
     show(blockSponsored, false);
     show(blockNotSponsored, false);
 
@@ -284,11 +251,8 @@
         return;
       }
 
-      const { country, lang } = await resolveGeo({ timeoutMs: 500 });
-      log("context:", { metier, country, lang });
-
+      const { country, lang } = await resolveGeo({ timeoutMs: 350 });
       const r = await fetchSponsorInfo(metier, country, lang);
-      log("sponsor-info:", r.status, r.data);
 
       if (!r.ok || !r.data || typeof r.data !== "object"){
         await applySponsorDecision({ sponsored: false });
@@ -296,7 +260,6 @@
       }
 
       await applySponsorDecision(r.data);
-
     }catch(e){
       console.warn("[metier-page] boot error", e);
       try { await applySponsorDecision({ sponsored: false }); } catch(_){}
