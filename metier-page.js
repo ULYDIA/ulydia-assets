@@ -427,6 +427,56 @@
     }
   }
 
+function placeRootAndHideLegacy() {
+  // 1) Ensure root exists
+  const root = ensureRoot();
+
+  // 2) Try to find a good insertion point (your code embed block OR banner block)
+  // We'll use the FIRST element that matches one of these selectors.
+  const anchor =
+    document.querySelector("#ul_legacy_metier_hero") ||
+    document.querySelector(".metier-banners") ||
+    document.querySelector("[data-ul-anchor='metier-hero']") ||
+    null;
+
+  // If legacy hero wrapper exists, hide it (safe)
+  const legacy = document.getElementById("ul_legacy_metier_hero");
+  if (legacy) legacy.style.display = "none";
+
+  // If we have an anchor and root isn't right after it, move it right after anchor
+  if (anchor) {
+    const parent = anchor.parentElement;
+    if (parent) {
+      // insert root after anchor
+      if (anchor.nextElementSibling !== root) {
+        parent.insertBefore(root, anchor.nextElementSibling);
+      }
+    }
+  } else {
+    // As a fallback, move root to top under header
+    const header = document.querySelector("header") || document.querySelector(".w-nav") || null;
+    if (header && header.parentElement) {
+      header.parentElement.insertBefore(root, header.nextElementSibling);
+    } else {
+      // last fallback: body top
+      document.body.prepend(root);
+    }
+  }
+
+  // Mark HTML (optional)
+  document.documentElement.setAttribute("data-ul-metier-v4", "1");
+
+  if (DEBUG) log("root placed", {
+    legacyFound: !!legacy,
+    anchorFound: !!anchor,
+    rootTop: root.getBoundingClientRect().top
+  });
+}
+
+
+
+
+
   function renderHero({ title, categoryLine, shortIntro, sponsored, sponsorName, sponsorLink, wideUrl, squareUrl, houseLink, ctaText }){
     const root=ensureRoot();
     root.innerHTML = `
@@ -472,6 +522,29 @@
   // =========================================================
   async function main(){
     injectCSS();
+
+    function autoHideLegacyHero(){
+    // on repère une section connue du legacy
+    const marker =
+        document.querySelector("#Sponsorise, #NonSponsorise") || // si tu as des IDs
+        Array.from(document.querySelectorAll("section, div")).find(el =>
+        (el.textContent || "").trim().toLowerCase() === "sponsorisé" ||
+        (el.textContent || "").trim().toLowerCase() === "non sponsorisé"
+        );
+
+    if (!marker) return;
+
+    // le hero est généralement le bloc juste avant les sections sponsor
+    const candidate = marker.closest("section, div")?.previousElementSibling;
+    if (candidate) candidate.style.display = "none";
+    }
+
+// dans main():
+autoHideLegacyHero();
+
+
+    placeRootAndHideLegacy();
+
     document.documentElement.setAttribute("data-ul-metier-v4","1");
 
     const slug = slugFromPath();
