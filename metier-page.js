@@ -1,26 +1,39 @@
 /**
- * Ulydia — Metier Page (FULL CODE) — v4.4
+ * Ulydia — Metier Page (FULL CODE) — v4.6
  * Root: #ulydia-metier-root
  *
  * Data sources (priority):
  *  1) Worker: POST /metier-page (optional)
  *  2) Worker: POST /sponsor-info (existing)
  *  3) CMS fallback: #ul_cms_payload [data-ul-f]
+ *  4) Heuristic fallback: headings in page
  *
  * Banners:
  *  - Sponsored: sponsor logos + link (wide + square)
- *  - Not sponsored: country banners by ISO from #countriesData (robust) + fallback SVG
+ *  - Not sponsored:
+ *      A) from #countriesData (ISO -> wide/square)
+ *      B) fallback SVG (always shows something)
  *
  * Debug:
  *   window.__METIER_PAGE_DEBUG__ = true
  */
 
 (() => {
-  window.__METIER_PAGE_VERSION__ = "v4.4";
+  // =========================================================
+  // 0) BOOT GUARD (avoid multi versions running)
+  // =========================================================
+  if (window.__ULYDIA_METIER_PAGE__) return;
+  window.__ULYDIA_METIER_PAGE__ = true;
 
-  if (window.__ULYDIA_METIER_PAGE_V44__) return;
-  window.__ULYDIA_METIER_PAGE_V44__ = true;
+  window.__METIER_PAGE_VERSION__ = "v4.6";
 
+  const DEBUG = !!window.__METIER_PAGE_DEBUG__;
+  const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
+  const qp = (name) => new URLSearchParams(location.search).get(name);
+
+  // =========================================================
+  // 1) CONFIG
+  // =========================================================
   const CFG = {
     WORKER_URL: "https://ulydia-business.contact-871.workers.dev",
     PROXY_SECRET: "ulydia_2026_proxy_Y4b364u2wsFsQL",
@@ -32,9 +45,12 @@
 
     JOB_SEGMENT: "fiche-metiers",
 
-    // ✅ SHELL MODE: cache le contenu Webflow (garde header/footer)
-    // Si tu veux voir le CMS en dessous pour debug, mets false
+    // Shell mode = hide Webflow content (keep nav/footer + hidden data containers)
     SHELL_MODE: true,
+
+    // IDs for hidden data containers (do not hide these)
+    COUNTRIES_DATA_ID: "countriesData",
+    CMS_PAYLOAD_ID: "ul_cms_payload",
 
     LABELS: {
       fr: { description:"Description", missions:"Missions", competences:"Compétences", environnements:"Environnements", evolutions:"Évolutions", specifique_pays:"Spécifique pays", faq:"FAQ", not_available:"—", sponsored_by:"Sponsorisé par" },
@@ -45,54 +61,67 @@
     },
   };
 
-  const DEBUG = !!window.__METIER_PAGE_DEBUG__;
-  const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
-  const qp = (name) => new URLSearchParams(location.search).get(name);
+  // =========================================================
+  // 2) HELPERS
+  // =========================================================
+  function apiBase() {
+    return String(CFG.WORKER_URL || "").replace(/\/$/, "");
+  }
 
-  function apiBase() { return String(CFG.WORKER_URL || "").replace(/\/$/, ""); }
-  function safeUrl(u){
-    try{
+  function safeUrl(u) {
+    try {
       const s = String(u || "").trim();
       if (!s) return "";
       const url = new URL(s, location.origin);
       if (/^javascript:/i.test(url.href)) return "";
       return url.href;
-    }catch{ return ""; }
+    } catch {
+      return "";
+    }
   }
-  function pickUrl(v){
+
+  function pickUrl(v) {
     if (!v) return "";
     if (typeof v === "string") return safeUrl(v);
     if (typeof v === "object") return safeUrl(v.url || v.value || "");
     return "";
   }
-  function normalizeLang(l){
+
+  function normalizeLang(l) {
     const s = String(l || "").trim().toLowerCase();
     if (!s) return CFG.DEFAULT_LANG;
     return (s.split("-")[0] || CFG.DEFAULT_LANG);
   }
-  function getFinalLang(){
+
+  function getFinalLang() {
     const byQP = (qp("lang") || "").trim();
-    const byAttr = document.body?.getAttribute("data-lang") || document.documentElement?.getAttribute("data-lang") || "";
+    const byAttr =
+      document.body?.getAttribute("data-lang") ||
+      document.documentElement?.getAttribute("data-lang") ||
+      "";
     const byHtml = document.documentElement?.lang || "";
     return normalizeLang(byQP || byAttr || byHtml || CFG.DEFAULT_LANG);
   }
-  function labels(lang){
+
+  function labels(lang) {
     const L = normalizeLang(lang);
     return CFG.LABELS[L] || CFG.LABELS.en;
   }
-  function slugFromPath(){
+
+  function slugFromPath() {
     const p = location.pathname.replace(/\/+$/, "");
     const parts = p.split("/").filter(Boolean);
     const idx = parts.findIndex((x) => x === CFG.JOB_SEGMENT);
     if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
     return parts[parts.length - 1] || "";
   }
-  function fmtList(arr){
+
+  function fmtList(arr) {
     const a = Array.isArray(arr) ? arr : [];
     return a.map((x) => String(x || "").trim()).filter(Boolean);
   }
 
-  async function preloadImage(url){
+  async function preloadImage(url) {
     return new Promise((resolve) => {
       if (!url) return resolve(false);
       const img = new Image();
@@ -102,16 +131,15 @@
     });
   }
 
-  // -------------------------
-  // DARK THEME (dashboard-like)
-  // -------------------------
+  // =========================================================
+  // 3) CSS (DASHBOARD STYLE)
+  // =========================================================
   const CSS = `
 :root{
   --ul-font: 'Montserrat', system-ui, -apple-system, Segoe UI, Roboto, Arial;
   --ul-bg: #0b1020;
   --ul-bg-2: #070b16;
   --ul-surface: rgba(255,255,255,0.06);
-  --ul-surface-2: rgba(255,255,255,0.09);
   --ul-border: rgba(255,255,255,0.10);
   --ul-text: rgba(255,255,255,0.92);
   --ul-muted: rgba(255,255,255,0.70);
@@ -119,7 +147,6 @@
   --ul-accent: #646cfd;
   --ul-radius-xl: 22px;
   --ul-radius-lg: 16px;
-  --ul-radius-md: 12px;
   --ul-shadow: 0 16px 50px rgba(0,0,0,0.35);
   --ul-max: 1120px;
   --ul-gap: 16px;
@@ -131,14 +158,12 @@
   --ul-tab-h: 44px;
 }
 
-/* ✅ Rend la page lisible (sinon blanc sur blanc) */
 html.ul-metier-dark, html.ul-metier-dark body{
   background: radial-gradient(1200px 600px at 20% -10%, rgba(100,108,253,0.22), transparent 55%),
               radial-gradient(900px 500px at 95% 10%, rgba(255,255,255,0.06), transparent 60%),
               linear-gradient(180deg, var(--ul-bg), var(--ul-bg-2));
 }
 
-/* Root + reset minimal */
 #ulydia-metier-root *{ box-sizing: border-box; }
 #ulydia-metier-root{
   font-family: var(--ul-font);
@@ -161,9 +186,7 @@ html.ul-metier-dark, html.ul-metier-dark body{
   align-items: stretch;
   margin-bottom: var(--ul-gap);
 }
-@media (max-width: 960px){
-  .ul-hero{ grid-template-columns: 1fr; }
-}
+@media (max-width: 960px){ .ul-hero{ grid-template-columns: 1fr; } }
 
 .ul-card{
   background: var(--ul-surface);
@@ -214,7 +237,6 @@ html.ul-metier-dark, html.ul-metier-dark body{
   overflow: hidden;
   border: 1px solid var(--ul-border);
   background: rgba(255,255,255,0.03);
-  transform: translateZ(0);
 }
 .ul-banner img{
   width: 100%;
@@ -223,7 +245,6 @@ html.ul-metier-dark, html.ul-metier-dark body{
 }
 .ul-banner-wide{ aspect-ratio: 16 / 5; }
 .ul-banner-square{ aspect-ratio: 1 / 1; }
-
 .ul-banner:hover{ border-color: rgba(100,108,253,0.35); }
 .ul-banner:after{
   content:"";
@@ -258,9 +279,7 @@ html.ul-metier-dark, html.ul-metier-dark body{
   grid-template-columns: 1.4fr 0.9fr;
   gap: var(--ul-gap);
 }
-@media (max-width: 960px){
-  .ul-main{ grid-template-columns: 1fr; }
-}
+@media (max-width: 960px){ .ul-main{ grid-template-columns: 1fr; } }
 
 .ul-tabs{
   display:flex; gap: 10px; flex-wrap: wrap;
@@ -306,39 +325,6 @@ html.ul-metier-dark, html.ul-metier-dark body{
 }
 .ul-side .ul-side-section + .ul-side-section{ margin-top: 14px; }
 
-.ul-faq-item{
-  border: 1px solid var(--ul-border);
-  background: rgba(255,255,255,0.04);
-  border-radius: var(--ul-radius-lg);
-  overflow: hidden;
-}
-.ul-faq-q{
-  width: 100%;
-  display:flex; align-items:center; justify-content:space-between;
-  gap: 10px;
-  padding: 12px 14px;
-  cursor:pointer;
-  border: 0;
-  background: transparent;
-  color: var(--ul-text);
-  font-weight: 900;
-  font-size: var(--ul-base);
-}
-.ul-faq-a{
-  padding: 0 14px 14px;
-  color: var(--ul-muted);
-  font-size: var(--ul-base);
-  line-height: 1.6;
-  display:none;
-}
-.ul-faq-item[data-open="1"] .ul-faq-a{ display:block; }
-.ul-chevron{
-  opacity: 0.85;
-  transform: rotate(0deg);
-  transition: transform .12s ease;
-}
-.ul-faq-item[data-open="1"] .ul-chevron{ transform: rotate(180deg); }
-
 .ul-skel{
   height: 12px;
   border-radius: 999px;
@@ -360,8 +346,8 @@ html.ul-metier-dark, html.ul-metier-dark body{
 }
 `;
 
-  function injectCSS(){
-    const id = "ul_metier_css_v44";
+  function injectCSS() {
+    const id = "ul_metier_css_v46";
     if (document.getElementById(id)) return;
     const style = document.createElement("style");
     style.id = id;
@@ -369,217 +355,101 @@ html.ul-metier-dark, html.ul-metier-dark body{
     document.head.appendChild(style);
   }
 
-  function applyDarkTheme(){
+  function applyDarkTheme() {
     try { document.documentElement.classList.add("ul-metier-dark"); } catch {}
   }
 
-  // -------------------------
-  // Optional: hide Webflow content (shell)
-  // -------------------------
-  function applyShellMode(){
+  // =========================================================
+  // 4) SHELL MODE (hide Webflow but keep required nodes)
+  // =========================================================
+  function applyShellMode() {
     if (!CFG.SHELL_MODE) return;
 
-    // On masque tout ce qui n’est pas root + header/footer (heuristiques Webflow)
-    // Ajuste si besoin selon ta structure.
     const root = document.getElementById("ulydia-metier-root");
-    const keep = new Set([root]);
-const countriesData = document.getElementById("countriesData");
-if (countriesData) keep.add(countriesData);
+    const countriesData = document.getElementById(CFG.COUNTRIES_DATA_ID);
+    const cmsPayload = document.getElementById(CFG.CMS_PAYLOAD_ID);
 
+    // keep nav/footer + our root + hidden data blocks
+    const keep = new Set();
+    if (root) keep.add(root);
+    if (countriesData) keep.add(countriesData);
+    if (cmsPayload) keep.add(cmsPayload);
 
-    // Essaye de garder navbar/footer Webflow s’ils existent
     const nav = document.querySelector("header, .w-nav, .navbar, [data-ul-keep='nav']");
     const foot = document.querySelector("footer, .footer, [data-ul-keep='footer']");
     if (nav) keep.add(nav);
     if (foot) keep.add(foot);
 
-    // Masque les sections principales Webflow (souvent .w-section / main)
-    document.querySelectorAll("main, .w-section, .section, .container, .wf-section").forEach((el) => {
-      if (keep.has(el)) return;
-      if (root && el.contains(root)) return;
-      // Laisse nav/footer
+    // Hide big content containers only (not everything)
+    const candidates = document.querySelectorAll("main, .w-section, .section, .wf-section, [data-ul-shell-hide='1']");
+    candidates.forEach((el) => {
+      if (!el) return;
+      for (const k of keep) {
+        if (k && (el === k || el.contains(k))) return;
+      }
       if (nav && (el === nav || el.contains(nav))) return;
       if (foot && (el === foot || el.contains(foot))) return;
-      // Ne masque pas le body/html
-      if (el === document.body || el === document.documentElement) return;
-
       el.style.display = "none";
     });
   }
 
-  // -------------------------
-  // Country banners (robust)
-  // -------------------------
-  function readCountryBannersFromCMS(){
-    const root = document.getElementById("countriesData");
-    if (!root) return null;
-
-    // items dyn list
-    let items = Array.from(root.querySelectorAll(".w-dyn-item, [data-ul-country-item], .w-dyn-items > *"));
-    if (!items.length) items = Array.from(root.children || []);
-    if (!items.length) return null;
-
-    const out = [];
-
-    for (const it of items) {
-      // ISO detection
-      let iso = (it.querySelector('[data-ul-country="iso"]')?.textContent || "").trim().toUpperCase();
-      if (!iso) iso = (it.querySelector(".iso-code")?.textContent || "").trim().toUpperCase();
-      if (!iso) {
-        const txt = (it.textContent || "").toUpperCase();
-        const mm = txt.match(/\b[A-Z]{2}\b/);
-        if (mm) iso = mm[0];
-      }
-      if (!iso) continue;
-
-      // images: try specific selectors first, else take first 2 <img>
-      let wide =
-        safeUrl(it.querySelector('[data-ul-country="banner_wide"]')?.getAttribute("src") || "") ||
-        safeUrl(it.querySelector(".banner-img-1 img")?.getAttribute("src") || "") ||
-        safeUrl(it.querySelector("img.banner-img-1")?.getAttribute("src") || "");
-
-      let square =
-        safeUrl(it.querySelector('[data-ul-country="banner_square"]')?.getAttribute("src") || "") ||
-        safeUrl(it.querySelector(".banner-img-2 img")?.getAttribute("src") || "") ||
-        safeUrl(it.querySelector("img.banner-img-2")?.getAttribute("src") || "");
-
-      if (!wide || !square) {
-        const imgs = Array.from(it.querySelectorAll("img"))
-          .map(img => safeUrl(img.currentSrc || img.getAttribute("src") || ""))
-          .filter(Boolean);
-        if (!wide && imgs[0]) wide = imgs[0];
-        if (!square && imgs[1]) square = imgs[1];
-      }
-
-      out.push({ iso, wide, square });
-    }
-
-    return out.length ? out : null;
-
-    // DEBUG helpers (console)
-    try{
-    window.getCountryBanner = (iso, kind) => {
-        const row = pickCountryRow(String(iso||"").toUpperCase());
-        if (!row) return "";
-        return (kind === "wide" ? row.wide : row.square) || "";
-    };
-    window.__METIER_PAGE_VERSION__ = window.__METIER_PAGE_VERSION__ || "vX";
-    }catch{}
-
-
-  }
-
-  function pickCountryRow(countryISO){
-    const list = readCountryBannersFromCMS();
-    if (!list) return null;
-    const iso = String(countryISO || "").trim().toUpperCase();
-    return list.find(x => x.iso === iso) || null;
-  }
-
-  function svgBannerDataUrl(textTop, textBottom){
-    const t1 = encodeURIComponent(textTop || "Ulydia");
-    const t2 = encodeURIComponent(textBottom || "Sponsoriser cette fiche");
-    const svg =
-`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="500">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0b1020"/>
-      <stop offset="1" stop-color="#646cfd"/>
-    </linearGradient>
-  </defs>
-  <rect width="100%" height="100%" rx="32" fill="url(#g)"/>
-  <circle cx="1320" cy="120" r="220" fill="rgba(255,255,255,0.10)"/>
-  <circle cx="1260" cy="390" r="260" fill="rgba(255,255,255,0.07)"/>
-  <text x="80" y="220" font-family="Montserrat, Arial" font-size="54" font-weight="800" fill="rgba(255,255,255,0.92)">${decodeURIComponent(t1)}</text>
-  <text x="80" y="300" font-family="Montserrat, Arial" font-size="40" font-weight="700" fill="rgba(255,255,255,0.85)">${decodeURIComponent(t2)}</text>
-</svg>`;
-    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
-  }
-
-  async function resolveBanners(meta, countryISO){
-    // sponsor
-    if (meta?.sponsored && meta?.sponsor) {
-      const sponsorLink = safeUrl(meta.sponsor.link || "");
-      const wideUrl = pickUrl(meta?.sponsor?.logo_2 || meta?.sponsor?.logo_wide || "");
-      const squareUrl = pickUrl(meta?.sponsor?.logo_1 || meta?.sponsor?.logo_square || "");
-
-      const okWide = await preloadImage(wideUrl);
-      const okSq = await preloadImage(squareUrl);
-
-      return {
-        mode: "sponsor",
-        wideUrl: okWide ? wideUrl : svgBannerDataUrl("Ulydia", "Sponsored"),
-        squareUrl: okSq ? squareUrl : svgBannerDataUrl("Ulydia", "Sponsored"),
-        link: sponsorLink,
-      };
-    }
-
-    // non sponsor: ISO banners via #countriesData
-    const row = pickCountryRow(countryISO);
-    const wide = pickUrl(row?.wide || "");
-    const square = pickUrl(row?.square || "");
-
-    log("non-sponsor banners", { countryISO, wide: !!wide, square: !!square });
-
-    const okWide = await preloadImage(wide);
-    const okSq = await preloadImage(square);
-
-    return {
-      mode: "house",
-      wideUrl: okWide ? wide : svgBannerDataUrl("Ulydia", "Sponsoriser cette fiche"),
-      squareUrl: okSq ? square : svgBannerDataUrl("Ulydia", "Sponsoriser"),
-      link: "/sponsorship",
-    };
-  }
-
-  // -------------------------
-  // Country detection (ipinfo cache)
-  // -------------------------
-  function readIpCache(){
-    try{
+  // =========================================================
+  // 5) COUNTRY DETECTION (ipinfo cache)
+  // =========================================================
+  function readIpCache() {
+    try {
       const raw = localStorage.getItem(CFG.STORAGE_IP_KEY);
       if (!raw) return null;
       const obj = JSON.parse(raw);
       if (!obj || !obj.ts) return null;
       if (Date.now() - obj.ts > CFG.IP_TTL_MS) return null;
       return obj.data || null;
-    }catch{ return null; }
+    } catch {
+      return null;
+    }
   }
-  function writeIpCache(data){
-    try{ localStorage.setItem(CFG.STORAGE_IP_KEY, JSON.stringify({ ts: Date.now(), data })); }catch{}
+
+  function writeIpCache(data) {
+    try {
+      localStorage.setItem(CFG.STORAGE_IP_KEY, JSON.stringify({ ts: Date.now(), data }));
+    } catch {}
   }
-  async function getCountryISO(){
+
+  async function getCountryISO() {
     const forced = (qp("country") || "").trim();
     if (forced) return forced.toUpperCase();
 
     const cached = readIpCache();
     if (cached?.country) return String(cached.country).toUpperCase();
 
-    try{
+    try {
       const url = `https://ipinfo.io/json?token=${encodeURIComponent(CFG.IPINFO_TOKEN)}`;
-      const r = await fetch(url, { method:"GET" });
+      const r = await fetch(url, { method: "GET" });
       const j = await r.json().catch(() => null);
       if (j && j.country) writeIpCache(j);
       return String(j?.country || "FR").toUpperCase();
-    }catch{
+    } catch {
       return "FR";
     }
   }
 
-  // -------------------------
-  // Worker calls
-  // -------------------------
-  async function postWorker(path, payload){
+  // =========================================================
+  // 6) WORKER CALLS
+  // =========================================================
+  async function postWorker(path, payload) {
     const url = `${apiBase()}${path}`;
     const r = await fetch(url, {
       method: "POST",
-      headers: { "content-type":"application/json", "x-proxy-secret": CFG.PROXY_SECRET },
+      headers: {
+        "content-type": "application/json",
+        "x-proxy-secret": CFG.PROXY_SECRET,
+      },
       body: JSON.stringify(payload || {}),
     });
 
     const text = await r.text();
     let json = null;
-    try{ json = JSON.parse(text); } catch {}
+    try { json = JSON.parse(text); } catch {}
 
     if (!r.ok) {
       const msg = json?.error || json?.message || text || `HTTP ${r.status}`;
@@ -591,31 +461,33 @@ if (countriesData) keep.add(countriesData);
     return json;
   }
 
-  async function fetchMetierData({ slug, country, lang }){
+  async function fetchMetierData({ slug, country, lang }) {
     const payload = { metier_slug: slug, metier: slug, country, lang, iso: country };
 
-    try{
+    // optional endpoint
+    try {
       const j = await postWorker("/metier-page", payload);
       if (j && typeof j === "object") return { mode: "metier-page", data: j };
-    }catch(e){
+    } catch (e) {
       log("metier-page failed:", e?.message || e);
     }
 
-    try{
+    // existing endpoint
+    try {
       const j = await postWorker("/sponsor-info", payload);
       if (j && typeof j === "object") return { mode: "sponsor-info", data: j };
-    }catch(e){
+    } catch (e) {
       log("sponsor-info failed:", e?.message || e);
     }
 
-    return { mode:"none", data:null };
+    return { mode: "none", data: null };
   }
 
-  // -------------------------
-  // CMS payload fallback
-  // -------------------------
-  function readCmsPayload(){
-    const root = document.getElementById("ul_cms_payload") || document;
+  // =========================================================
+  // 7) CMS PAYLOAD FALLBACK + HEURISTIC
+  // =========================================================
+  function readCmsPayload() {
+    const root = document.getElementById(CFG.CMS_PAYLOAD_ID) || document;
     const nodes = root.querySelectorAll("[data-ul-f]");
     if (!nodes?.length) return null;
 
@@ -630,15 +502,64 @@ if (countriesData) keep.add(countriesData);
       else if (Array.isArray(out[key])) out[key].push(txt);
       else out[key] = [out[key], txt];
     });
+
     return Object.keys(out).length ? out : null;
   }
 
-  function cmsToModel(cms){
+  function heuristicFromHeadings() {
+    const out = {};
+    const allHeads = Array.from(document.querySelectorAll("h1,h2,h3"));
+    const norm = (s) =>
+      String(s || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9 ]/g, "");
+
+    const getNextText = (h) => {
+      let el = h.nextElementSibling;
+      while (el && (el.tagName === "BR" || (el.textContent || "").trim() === "")) el = el.nextElementSibling;
+      return (el?.textContent || "").trim();
+    };
+
+    const map = [
+      { k: "title", pats: ["metier", "job", "title", "nom"] },
+      { k: "description", pats: ["description", "presentation", "resume", "overview"] },
+      { k: "missions", pats: ["missions", "mission"] },
+      { k: "competences", pats: ["competences", "skills", "competence"] },
+      { k: "environnements", pats: ["environnements", "environments", "environment"] },
+      { k: "evolutions", pats: ["evolutions", "career", "progression"] },
+    ];
+
+    for (const h of allHeads) {
+      const t = norm(h.textContent);
+      for (const m of map) {
+        if (!m.pats.some(p => t.includes(norm(p)))) continue;
+        const v = getNextText(h);
+        if (v) out[m.k] = v;
+      }
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
+  function cmsToModel(cms) {
     if (!cms || typeof cms !== "object") return null;
 
     const keys = Object.keys(cms);
-    const norm = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g,"_");
-    const valStr = (v) => Array.isArray(v) ? v.map(x=>String(x||"").trim()).filter(Boolean).join("\n") : String(v||"").trim();
+
+    const norm = (s) =>
+      String(s || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, "_");
+
+    const valStr = (v) => {
+      if (v == null) return "";
+      if (Array.isArray(v)) return v.map(x => String(x||"").trim()).filter(Boolean).join("\n");
+      return String(v).trim();
+    };
 
     const pickBy = (patterns, { preferLongest = true } = {}) => {
       const hits = [];
@@ -646,11 +567,11 @@ if (countriesData) keep.add(countriesData);
         const nk = norm(k);
         if (patterns.some(p => nk.includes(p))) {
           const v = valStr(cms[k]);
-          if (v) hits.push({ k, v });
+          if (v) hits.push({ k, nk, v });
         }
       }
       if (!hits.length) return "";
-      if (preferLongest) hits.sort((a,b) => b.v.length - a.v.length);
+      if (preferLongest) hits.sort((a,b) => (b.v.length - a.v.length));
       return hits[0].v;
     };
 
@@ -660,21 +581,25 @@ if (countriesData) keep.add(countriesData);
         const nk = norm(k);
         if (!patterns.some(p => nk.includes(p))) continue;
         const v = cms[k];
-        if (Array.isArray(v)) v.forEach(x => { const s = String(x||"").trim(); if (s) out.push(s); });
-        else { const s = String(v||"").trim(); if (s) out.push(s); }
+        if (Array.isArray(v)) {
+          v.forEach(x => { const s = String(x||"").trim(); if (s) out.push(s); });
+        } else {
+          const s = String(v||"").trim();
+          if (s) out.push(s);
+        }
       }
       return Array.from(new Set(out));
     };
 
-    const title = pickBy(["metier","job","title","nom","name"], { preferLongest:false });
-    const description = pickBy(["description","desc","presentation","resume","overview"], { preferLongest:true });
-    const missions = pickListBy(["mission","tache","responsabilite"]);
-    const competences = pickListBy(["competence","skill","aptitude"]);
-    const environnements = pickListBy(["environnement","environment","cadre"]);
-    const evolutions = pickListBy(["evolution","career","progression"]);
+    const title = pickBy(["metier", "job", "title", "nom", "name"], { preferLongest: false });
+    const description = pickBy(["description", "desc", "presentation", "resume", "overview"], { preferLongest: true });
+    const missions = pickListBy(["mission", "tache", "responsabilite"]);
+    const competences = pickListBy(["competence", "skill", "aptitude"]);
+    const environnements = pickListBy(["environnement", "environment", "cadre"]);
+    const evolutions = pickListBy(["evolution", "career", "progression"]);
 
     const model = {
-      meta: { sponsored:false, sponsor:null },
+      meta: { sponsored: false, sponsor: null },
       metier: {
         title: title || "",
         description: description || "",
@@ -683,9 +608,17 @@ if (countriesData) keep.add(countriesData);
         environnements: fmtList(environnements),
         evolutions: fmtList(evolutions),
       },
-      country_specific: { text:"", blocks:[] },
+      country_specific: { text: "", blocks: [] },
       faq: [],
     };
+
+    const hasAny =
+      !!model.metier.title ||
+      !!model.metier.description ||
+      model.metier.missions.length ||
+      model.metier.competences.length ||
+      model.metier.environnements.length ||
+      model.metier.evolutions.length;
 
     if (DEBUG) {
       log("CMS keys detected:", keys);
@@ -698,18 +631,13 @@ if (countriesData) keep.add(countriesData);
       });
     }
 
-    const hasAny =
-      !!model.metier.title ||
-      !!model.metier.description ||
-      model.metier.missions.length ||
-      model.metier.competences.length ||
-      model.metier.environnements.length ||
-      model.metier.evolutions.length;
-
     return hasAny ? model : null;
   }
 
-  function workerToModel(workerData){
+  // =========================================================
+  // 8) NORMALIZE WORKER -> MODEL
+  // =========================================================
+  function workerToModel(workerData) {
     if (!workerData || typeof workerData !== "object") return null;
 
     const metier = workerData.metier || workerData.job || workerData.metier_data || null;
@@ -749,11 +677,135 @@ if (countriesData) keep.add(countriesData);
     return hasAny ? model : null;
   }
 
-  // -------------------------
-  // UI
-  // -------------------------
+  // =========================================================
+  // 9) COUNTRY BANNERS (NON SPONSOR)
+  // =========================================================
+  function readCountryBannersFromCMS() {
+    const root = document.getElementById(CFG.COUNTRIES_DATA_ID);
+    if (!root) return null;
+
+    // dyn list items
+    let items = Array.from(root.querySelectorAll(".w-dyn-item, [data-ul-country-item], .w-dyn-items > *"));
+    if (!items.length) items = Array.from(root.children || []);
+    if (!items.length) return null;
+
+    const out = [];
+
+    for (const it of items) {
+      // ISO
+      let iso =
+        (it.querySelector('[data-ul-country="iso"]')?.textContent || "").trim().toUpperCase() ||
+        (it.querySelector(".iso-code")?.textContent || "").trim().toUpperCase();
+
+      if (!iso) {
+        const txt = (it.textContent || "").toUpperCase();
+        const mm = txt.match(/\b[A-Z]{2}\b/);
+        if (mm) iso = mm[0];
+      }
+      if (!iso) continue;
+
+      // wide & square
+      let wide =
+        safeUrl(it.querySelector('[data-ul-country="banner_wide"]')?.getAttribute("src") || "") ||
+        safeUrl(it.querySelector("img.banner-img-1")?.getAttribute("src") || "") ||
+        safeUrl(it.querySelector(".banner-img-1 img")?.getAttribute("src") || "");
+
+      let square =
+        safeUrl(it.querySelector('[data-ul-country="banner_square"]')?.getAttribute("src") || "") ||
+        safeUrl(it.querySelector("img.banner-img-2")?.getAttribute("src") || "") ||
+        safeUrl(it.querySelector(".banner-img-2 img")?.getAttribute("src") || "");
+
+      if (!wide || !square) {
+        const imgs = Array.from(it.querySelectorAll("img"))
+          .map(img => safeUrl(img.currentSrc || img.getAttribute("src") || ""))
+          .filter(Boolean);
+        if (!wide && imgs[0]) wide = imgs[0];
+        if (!square && imgs[1]) square = imgs[1];
+      }
+
+      out.push({ iso, wide, square });
+    }
+
+    return out.length ? out : null;
+  }
+
+  function pickCountryRow(countryISO) {
+    const list = readCountryBannersFromCMS();
+    if (!list) return null;
+    const iso = String(countryISO || "").trim().toUpperCase();
+    return list.find(x => x.iso === iso) || null;
+  }
+
+  function svgBannerDataUrl(textTop, textBottom) {
+    const t1 = encodeURIComponent(textTop || "Ulydia");
+    const t2 = encodeURIComponent(textBottom || "Sponsoriser cette fiche");
+    const svg =
+`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="500">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#646cfd"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" rx="32" fill="url(#g)"/>
+  <circle cx="1320" cy="120" r="220" fill="rgba(255,255,255,0.10)"/>
+  <circle cx="1260" cy="390" r="260" fill="rgba(255,255,255,0.07)"/>
+  <text x="80" y="220" font-family="Montserrat, Arial" font-size="54" font-weight="800" fill="rgba(255,255,255,0.92)">${decodeURIComponent(t1)}</text>
+  <text x="80" y="300" font-family="Montserrat, Arial" font-size="40" font-weight="700" fill="rgba(255,255,255,0.85)">${decodeURIComponent(t2)}</text>
+</svg>`;
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  }
+
+  async function resolveBanners(meta, countryISO) {
+    // Sponsored
+    if (meta?.sponsored && meta?.sponsor) {
+      const sponsorLink = safeUrl(meta.sponsor.link || "");
+      const wideUrl = pickUrl(meta?.sponsor?.logo_2 || meta?.sponsor?.logo_wide || "");
+      const squareUrl = pickUrl(meta?.sponsor?.logo_1 || meta?.sponsor?.logo_square || "");
+
+      const okWide = await preloadImage(wideUrl);
+      const okSq = await preloadImage(squareUrl);
+
+      return {
+        mode: "sponsor",
+        wideUrl: okWide ? wideUrl : svgBannerDataUrl("Ulydia", "Sponsored"),
+        squareUrl: okSq ? squareUrl : svgBannerDataUrl("Ulydia", "Sponsored"),
+        link: sponsorLink,
+      };
+    }
+
+    // Non sponsored → try countriesData
+    const row = pickCountryRow(countryISO);
+    const wide = pickUrl(row?.wide || "");
+    const square = pickUrl(row?.square || "");
+
+    log("non-sponsor banners", { countryISO, wide: !!wide, square: !!square, hasCountriesData: !!document.getElementById(CFG.COUNTRIES_DATA_ID) });
+
+    const okWide = await preloadImage(wide);
+    const okSq = await preloadImage(square);
+
+    return {
+      mode: "house",
+      wideUrl: okWide ? wide : svgBannerDataUrl("Ulydia", "Sponsoriser cette fiche"),
+      squareUrl: okSq ? square : svgBannerDataUrl("Ulydia", "Sponsoriser"),
+      link: "/sponsorship",
+    };
+  }
+
+  // Expose helper for your console tests
+  try {
+    window.getCountryBanner = (iso, kind) => {
+      const row = pickCountryRow(String(iso || "").toUpperCase());
+      if (!row) return "";
+      return (kind === "wide" ? row.wide : row.square) || "";
+    };
+  } catch {}
+
+  // =========================================================
+  // 10) UI
+  // =========================================================
   const UI = (() => {
-    function ensureRoot(){
+    function ensureRoot() {
       let root = document.getElementById("ulydia-metier-root");
       if (!root) {
         root = document.createElement("div");
@@ -763,16 +815,16 @@ if (countriesData) keep.add(countriesData);
       return root;
     }
 
-    function esc(s){
+    function esc(s) {
       return String(s || "")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
     }
 
-    function renderSkeleton(root){
+    function renderSkeleton(root) {
       root.innerHTML = `
         <div class="ul-wrap">
           <div class="ul-hero">
@@ -798,7 +850,7 @@ if (countriesData) keep.add(countriesData);
               <div class="ul-body" id="ul_body"></div>
             </div>
 
-            <div class="ul-card ul-card-pad ul-side" id="ul_side">
+            <div class="ul-card ul-card-pad ul-side" id="ul_side" style="display:none">
               <div class="ul-side-section" id="ul_country_blocks"></div>
               <div class="ul-side-section" id="ul_faq"></div>
             </div>
@@ -807,7 +859,7 @@ if (countriesData) keep.add(countriesData);
       `;
     }
 
-    function setBanner(anchor, imgUrl, link, external){
+    function setBanner(anchor, imgUrl, link, external) {
       if (!anchor) return;
       const img = anchor.querySelector("img");
       if (imgUrl) img.setAttribute("src", imgUrl);
@@ -829,36 +881,38 @@ if (countriesData) keep.add(countriesData);
       }
     }
 
-    function tabButton(id, label, selected){
+    function tabButton(id, label, selected) {
       return `<button class="ul-tab" type="button" data-tab="${esc(id)}" aria-selected="${selected ? "true" : "false"}">${esc(label)}</button>`;
     }
 
-    function isNonEmpty(v){
+    function isNonEmpty(v) {
       if (Array.isArray(v)) return v.length > 0;
       return !!String(v || "").trim();
     }
 
-    function renderBodyValue(value, emptyLabel){
+    function renderBodyValue(value, emptyLabel) {
       if (!isNonEmpty(value)) return `<div class="ul-muted">${esc(emptyLabel)}</div>`;
       if (Array.isArray(value)) {
-        return `<ul class="ul-list">${value.map((x)=>`<li>${esc(x)}</li>`).join("")}</ul>`;
+        return `<ul class="ul-list">${value.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
       }
       return `<div style="white-space:pre-wrap;">${esc(value)}</div>`;
     }
 
-    function renderAll({ ctx, model, banners }){
+    function renderAll({ ctx, model, banners }) {
       const root = ensureRoot();
       renderSkeleton(root);
 
       const t = labels(ctx.finalLang);
+
       const title = (model?.metier?.title || "").trim() || ctx.slug;
+      const desc = String(model?.metier?.description || "").trim();
+      const descPreview = desc.slice(0, 180);
 
       const heroCard = root.querySelector(".ul-hero .ul-card");
       if (heroCard) {
-        const descPreview = String(model?.metier?.description || "").trim().slice(0, 180);
         heroCard.innerHTML = `
           <h1 class="ul-title">${esc(title)}</h1>
-          ${descPreview ? `<p class="ul-sub">${esc(descPreview)}${model?.metier?.description?.length > 180 ? "…" : ""}</p>` : ""}
+          ${descPreview ? `<p class="ul-sub">${esc(descPreview)}${desc.length > 180 ? "…" : ""}</p>` : ""}
           <div class="ul-meta">
             <span class="ul-pill">ISO: ${esc(ctx.country)}</span>
             <span class="ul-pill">Lang: ${esc(ctx.finalLang)}</span>
@@ -885,11 +939,11 @@ if (countriesData) keep.add(countriesData);
       }
 
       const sections = [
-        { id:"description", label:t.description, value: model?.metier?.description },
-        { id:"missions", label:t.missions, value: model?.metier?.missions },
-        { id:"competences", label:t.competences, value: model?.metier?.competences },
-        { id:"environnements", label:t.environnements, value: model?.metier?.environnements },
-        { id:"evolutions", label:t.evolutions, value: model?.metier?.evolutions },
+        { id: "description", label: t.description, value: model?.metier?.description },
+        { id: "missions", label: t.missions, value: model?.metier?.missions },
+        { id: "competences", label: t.competences, value: model?.metier?.competences },
+        { id: "environnements", label: t.environnements, value: model?.metier?.environnements },
+        { id: "evolutions", label: t.evolutions, value: model?.metier?.evolutions },
       ];
 
       let defaultId = "description";
@@ -897,34 +951,31 @@ if (countriesData) keep.add(countriesData);
 
       const tabsEl = document.getElementById("ul_tabs");
       const bodyEl = document.getElementById("ul_body");
+
       if (tabsEl) tabsEl.innerHTML = sections.map(s => tabButton(s.id, s.label, s.id === defaultId)).join("");
 
-      function setSelected(id){
+      function setSelected(id) {
         tabsEl?.querySelectorAll("[data-tab]").forEach((b) => {
           b.setAttribute("aria-selected", b.getAttribute("data-tab") === id ? "true" : "false");
         });
-        const sec = sections.find((x)=>x.id === id);
+        const sec = sections.find((x) => x.id === id);
         if (bodyEl) bodyEl.innerHTML = renderBodyValue(sec?.value, t.not_available);
       }
 
-      tabsEl?.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => setSelected(b.getAttribute("data-tab"))));
-      setSelected(defaultId);
+      tabsEl?.querySelectorAll("[data-tab]").forEach((b) => {
+        b.addEventListener("click", () => setSelected(b.getAttribute("data-tab")));
+      });
 
-      // Sidebar currently kept (future blocks/FAQ)
-      const side = document.getElementById("ul_side");
-      const sideHas =
-        (document.getElementById("ul_country_blocks")?.innerHTML || "").trim() ||
-        (document.getElementById("ul_faq")?.innerHTML || "").trim();
-      if (!sideHas && side) side.style.display = "none";
+      setSelected(defaultId);
     }
 
     return { ensureRoot, renderSkeleton, renderAll };
   })();
 
-  // -------------------------
-  // Bootstrap
-  // -------------------------
-  async function main(){
+  // =========================================================
+  // 11) MAIN
+  // =========================================================
+  async function main() {
     injectCSS();
     applyDarkTheme();
 
@@ -934,35 +985,50 @@ if (countriesData) keep.add(countriesData);
     const slug = slugFromPath();
     const finalLang = getFinalLang();
     if (!slug) {
-      console.warn("[metier-page] no slug found");
+      console.warn("[metier-page] No metier slug found.");
       return;
     }
 
     const country = await getCountryISO();
     const ctx = { slug, finalLang, country };
+
+    // expose ctx for debug
+    try { window.__METIER_PAGE_CTX__ = ctx; } catch {}
+
     log("ctx", ctx);
 
-    // optional shell mode (after root exists)
+    // shell mode AFTER root exists
     applyShellMode();
 
+    // Worker first, then CMS, then heuristic
     const res = await fetchMetierData({ slug, country, lang: finalLang });
     const workerModel = workerToModel(res.data || null);
-    const cmsModel = cmsToModel(readCmsPayload());
 
-    const model = workerModel || cmsModel || {
-      meta: { sponsored:false, sponsor:null },
-      metier: { title: slug, description:"", missions:[], competences:[], environnements:[], evolutions:[] },
-      country_specific: { text:"", blocks:[] },
+    const cmsPayload = readCmsPayload();
+    const cmsModel = cmsToModel(cmsPayload);
+
+    const heur = cmsToModel(heuristicFromHeadings());
+
+    const model = workerModel || cmsModel || heur || {
+      meta: { sponsored: false, sponsor: null },
+      metier: { title: slug, description: "", missions: [], competences: [], environnements: [], evolutions: [] },
+      country_specific: { text: "", blocks: [] },
       faq: [],
     };
-    model.meta = model.meta || { sponsored:false, sponsor:null };
+
+    model.meta = model.meta || { sponsored: false, sponsor: null };
+
+    // debug model
+    try { window.__METIER_PAGE_MODEL__ = model; } catch {}
 
     const banners = await resolveBanners(model.meta, country);
 
     UI.renderAll({ ctx, model, banners });
 
-    log("ready", { mode: res.mode, sponsored: !!model.meta.sponsored });
+    log("ready", { mode: res.mode, sponsored: !!model.meta.sponsored, hasCountriesData: !!document.getElementById(CFG.COUNTRIES_DATA_ID) });
   }
 
-  main().catch((e) => console.error("[metier-page] fatal", e));
+  main().catch((e) => {
+    console.error("[metier-page] fatal", e);
+  });
 })();
