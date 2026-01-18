@@ -1296,16 +1296,16 @@ async function resolveBanners(meta, finalLang, countryISO) {
     log("ready", { mode: res.mode, sponsored: !!model.meta.sponsored });
   }
 
-function boot() {
-  main().catch(err => {
-    console.error("[metier-page] fatal error", err);
+function boot(){
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        main().catch((e) => console.error("[metier-page] fatal", e));
+      }, 0);
+    });
   });
 }
+boot();
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", boot);
-} else {
-  boot();
-}
 
 })();
