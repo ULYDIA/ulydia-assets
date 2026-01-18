@@ -550,40 +550,118 @@
   }
 
   function cmsToModel(cms) {
-    if (!cms) return null;
+  if (!cms || typeof cms !== "object") return null;
 
-    const model = {
-      metier: {
-        title: (cms.title || cms.metier_title || cms.name || "").trim(),
-        description: (cms.description || cms.desc || "").trim(),
-        missions: Array.isArray(cms.missions) ? cms.missions : (cms.missions ? [cms.missions] : []),
-        competences: Array.isArray(cms.competences) ? cms.competences : (cms.competences ? [cms.competences] : []),
-        environnements: Array.isArray(cms.environnements) ? cms.environnements : (cms.environnements ? [cms.environnements] : []),
-        evolutions: Array.isArray(cms.evolutions) ? cms.evolutions : (cms.evolutions ? [cms.evolutions] : []),
-      },
-      country_specific: {
-        text: (cms.specifique_pays || cms.country_specific || "").trim(),
-        blocks: [], // optional if you later encode blocks
-      },
-      faq: [], // optional if you later encode faq
-    };
+  const keys = Object.keys(cms);
 
-    model.metier.missions = fmtList(model.metier.missions);
-    model.metier.competences = fmtList(model.metier.competences);
-    model.metier.environnements = fmtList(model.metier.environnements);
-    model.metier.evolutions = fmtList(model.metier.evolutions);
+  const norm = (s) =>
+    String(s || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "_");
 
-    const hasAny =
-      !!model.metier.title ||
-      !!model.metier.description ||
-      model.metier.missions.length ||
-      model.metier.competences.length ||
-      model.metier.environnements.length ||
-      model.metier.evolutions.length ||
-      !!model.country_specific.text;
+  const valStr = (v) => {
+    if (v == null) return "";
+    if (Array.isArray(v)) return v.map(x => String(x||"").trim()).filter(Boolean).join("\n");
+    return String(v).trim();
+  };
 
-    return hasAny ? model : null;
+  const pickBy = (patterns, { preferLongest = true } = {}) => {
+    const hits = [];
+    for (const k of keys) {
+      const nk = norm(k);
+      if (patterns.some(p => nk.includes(p))) {
+        const v = valStr(cms[k]);
+        if (v) hits.push({ k, nk, v });
+      }
+    }
+    if (!hits.length) return "";
+    if (preferLongest) hits.sort((a,b) => (b.v.length - a.v.length));
+    return hits[0].v;
+  };
+
+  const pickListBy = (patterns) => {
+    const out = [];
+    for (const k of keys) {
+      const nk = norm(k);
+      if (!patterns.some(p => nk.includes(p))) continue;
+      const v = cms[k];
+      if (Array.isArray(v)) {
+        v.forEach(x => { const s = String(x||"").trim(); if (s) out.push(s); });
+      } else {
+        const s = String(v||"").trim();
+        if (s) out.push(s);
+      }
+    }
+    // dédoublonnage
+    return Array.from(new Set(out));
+  };
+
+  // --- auto map ---
+  const title =
+    pickBy(["metier", "job", "title", "nom", "name"], { preferLongest: false });
+
+  const description =
+    pickBy(["description", "desc", "presentation", "resume", "overview"], { preferLongest: true });
+
+  const missions =
+    pickListBy(["mission", "missions", "tache", "taches", "responsabilite"]);
+
+  const competences =
+    pickListBy(["competence", "competences", "skill", "skills", "aptitude"]);
+
+  const environnements =
+    pickListBy(["environnement", "environnements", "environment", "workplace", "cadre"]);
+
+  const evolutions =
+    pickListBy(["evolution", "evolutions", "career", "perspective", "progression"]);
+
+  const specifiquePays =
+    pickBy(["specifique_pays", "specific_pays", "country_specific", "pays", "local"], { preferLongest: true });
+
+  // si tu as des champs “metier_pays_bloc” en CMS brut, on peut les parser plus tard
+  const model = {
+    metier: {
+      title: title || "",
+      description: description || "",
+      missions: fmtList(missions),
+      competences: fmtList(competences),
+      environnements: fmtList(environnements),
+      evolutions: fmtList(evolutions),
+    },
+    country_specific: {
+      text: specifiquePays || "",
+      blocks: [],
+    },
+    faq: [],
+  };
+
+  const hasAny =
+    !!model.metier.title ||
+    !!model.metier.description ||
+    model.metier.missions.length ||
+    model.metier.competences.length ||
+    model.metier.environnements.length ||
+    model.metier.evolutions.length ||
+    !!model.country_specific.text;
+
+  if (DEBUG) {
+    log("CMS keys detected:", keys);
+    log("CMS mapped:", {
+      title: !!model.metier.title,
+      description: (model.metier.description || "").slice(0, 80),
+      missions: model.metier.missions.length,
+      competences: model.metier.competences.length,
+      environnements: model.metier.environnements.length,
+      evolutions: model.metier.evolutions.length,
+      specifique_pays: !!model.country_specific.text
+    });
   }
+
+  return hasAny ? model : null;
+}
+
 
   // =========================================================
   // 6) NORMALIZE WORKER -> MODEL
@@ -650,31 +728,60 @@
     return safeUrl(pack?.link || "/sponsorship");
   }
 
-  async function resolveBanners(meta, finalLang) {
-    // Sponsored
-    if (meta?.sponsored && meta?.sponsor) {
-      const sponsorLink = safeUrl(meta.sponsor.link || "");
-      const wideUrl = pickUrl(meta.sponsor.logo_2 || meta.sponsor.logo_wide || "");
-      const squareUrl = pickUrl(meta.sponsor.logo_1 || meta.sponsor.logo_square || "");
+  function svgBannerDataUrl(textTop, textBottom) {
+  const t1 = encodeURIComponent(textTop || "Ulydia");
+  const t2 = encodeURIComponent(textBottom || "Sponsoriser cette fiche");
+  const svg =
+`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="500">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#646cfd"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" rx="32" fill="url(#g)"/>
+  <circle cx="1320" cy="120" r="220" fill="rgba(255,255,255,0.10)"/>
+  <circle cx="1260" cy="390" r="260" fill="rgba(255,255,255,0.07)"/>
+  <text x="80" y="220" font-family="Montserrat, Arial" font-size="54" font-weight="800" fill="rgba(255,255,255,0.92)">${decodeURIComponent(t1)}</text>
+  <text x="80" y="300" font-family="Montserrat, Arial" font-size="40" font-weight="700" fill="rgba(255,255,255,0.85)">${decodeURIComponent(t2)}</text>
+</svg>`;
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
 
-      await Promise.all([preloadImage(wideUrl), preloadImage(squareUrl)]);
+async function resolveBanners(meta, finalLang) {
+  // Sponsored
+  if (meta?.sponsored && meta?.sponsor) {
+    const sponsorLink = safeUrl(meta.sponsor.link || "");
+    const wideUrl = pickUrl(meta.sponsor.logo_2 || meta.sponsor.logo_wide || "");
+    const squareUrl = pickUrl(meta.sponsor.logo_1 || meta.sponsor.logo_square || "");
 
-      return {
-        mode: "sponsor",
-        wideUrl,
-        squareUrl,
-        link: sponsorLink,
-      };
-    }
+    const okWide = await preloadImage(wideUrl);
+    const okSq   = await preloadImage(squareUrl);
 
-    // House
-    const wideUrl = getHouseBannerUrl("wide", finalLang);
-    const squareUrl = getHouseBannerUrl("square", finalLang);
-    const link = getHouseLink(finalLang);
-
-    await Promise.all([preloadImage(wideUrl), preloadImage(squareUrl)]);
-    return { mode: "house", wideUrl, squareUrl, link };
+    return {
+      mode: "sponsor",
+      wideUrl: okWide ? wideUrl : svgBannerDataUrl("Ulydia", "Sponsor"),
+      squareUrl: okSq ? squareUrl : svgBannerDataUrl("Ulydia", "Sponsor"),
+      link: sponsorLink,
+    };
   }
+
+  // House
+  const t = labels(finalLang);
+  const houseWide = getHouseBannerUrl("wide", finalLang);
+  const houseSq = getHouseBannerUrl("square", finalLang);
+  const link = getHouseLink(finalLang);
+
+  const okWide = await preloadImage(houseWide);
+  const okSq = await preloadImage(houseSq);
+
+  return {
+    mode: "house",
+    wideUrl: okWide ? houseWide : svgBannerDataUrl("Ulydia", t.sponsored_by ? "Sponsoriser cette fiche" : "Sponsoriser cette fiche"),
+    squareUrl: okSq ? houseSq : svgBannerDataUrl("Ulydia", "Sponsoriser"),
+    link,
+  };
+}
 
   // =========================================================
   // 8) UI (FULL RENDER IN ROOT)
