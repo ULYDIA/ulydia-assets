@@ -28,7 +28,57 @@ console.log("[metier-page] v4.8 active - legacy killed");
   };
 
   function apiBase(){ return String(CFG.WORKER_URL||"").replace(/\/$/,""); }
-  function safeUrl(u){ try{ const s=String(u||"").trim(); if(!s) return ""; const url=new URL(s, location.origin); if(/^javascript:/i.test(url.href)) return ""; return url.href; }catch{ return ""; } }
+function safeUrl(u){
+  try{
+    const s = String(u||"").trim();
+    if(!s) return "";
+    const url = new URL(s, location.origin);
+    if(/^javascript:/i.test(url.href)) return "";
+    return url.href;
+  }catch{ return ""; }
+}
+
+function getImgSrc(el){
+  if(!el) return "";
+  // el can be <img> OR wrapper containing <img>
+  const img = el.tagName === "IMG" ? el : el.querySelector("img");
+  if(!img) return "";
+  const src = img.currentSrc || img.getAttribute("src") || img.getAttribute("data-src") || "";
+  return safeUrl(src);
+}
+
+async function waitForSrc(el, timeoutMs = 2500){
+  const start = Date.now();
+  while(Date.now() - start < timeoutMs){
+    const u = getImgSrc(el);
+    if(u) return u;
+    await new Promise(r => setTimeout(r, 80));
+  }
+  return "";
+}
+
+async function readCountryRowByDataRole(root, iso){
+  const key = String(iso||"").trim().toUpperCase();
+  const items = Array.from(root.querySelectorAll(".w-dyn-item, [role='listitem'], .w-dyn-items > *"));
+  for(const it of items){
+    const isoEl = it.querySelector('[data-role="iso"]');
+    const itemIso = (isoEl?.textContent || "").trim().toUpperCase();
+    if(itemIso !== key) continue;
+
+    const wideEl = it.querySelector('[data-role="img1"]');
+    const squareEl = it.querySelector('[data-role="img2"]');
+
+    // try immediate, then wait (lazy)
+    let wide = getImgSrc(wideEl);
+    let square = getImgSrc(squareEl);
+
+    if(!wide) wide = await waitForSrc(wideEl, 2500);
+    if(!square) square = await waitForSrc(squareEl, 2500);
+
+    return { iso: key, wide, square };
+  }
+  return null;
+}
   function pickUrl(v){ if(!v) return ""; if(typeof v==="string") return safeUrl(v); if(typeof v==="object") return safeUrl(v.url||v.value||""); return ""; }
   function normalizeLang(l){ const s=String(l||"").trim().toLowerCase(); return (s ? (s.split("-")[0]||CFG.DEFAULT_LANG) : CFG.DEFAULT_LANG); }
   function getFinalLang(){ return normalizeLang(qp("lang") || document.body?.getAttribute("data-lang") || document.documentElement?.lang || CFG.DEFAULT_LANG); }
