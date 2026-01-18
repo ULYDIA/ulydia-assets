@@ -3,6 +3,10 @@
   window.__ULYDIA_METIER_PAGE__ = true;
   window.__METIER_PAGE_VERSION__ = "v4.8";
 
+window.__ULYDIA_METIER_SPONSOR_FINAL__ = true; // kill legacy body script v4.5
+window.__ULYDIA_PAGE_SPONSOR_SCRIPT__ = true;  // kill any older sponsor boots
+
+
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
   const qp = (name) => new URLSearchParams(location.search).get(name);
