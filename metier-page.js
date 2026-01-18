@@ -17,7 +17,7 @@
 
 (() => {
   // ✅ version visible dans la console
-  window.__METIER_PAGE_VERSION__ = "v4.2";
+  window.__METIER_PAGE_VERSION__ = "v4.3";
 
   if (window.__ULYDIA_METIER_PAGE_V4__) return;
   window.__ULYDIA_METIER_PAGE_V4__ = true;
@@ -106,12 +106,51 @@ HOUSE_BANNERS: {}, // ⛔ désactivé définitivement
 // =====================================================
 // COUNTRY CMS (countriesData) — NON SPONSORED BANNERS
 // =====================================================
+function _ul_extractImgUrl(node){
+  if (!node) return "";
+
+  // If it's a wrapper, try to find the img inside
+  let el = node;
+  if (el.tagName && String(el.tagName).toLowerCase() !== "img") {
+    const inner = el.querySelector?.("img");
+    if (inner) el = inner;
+  }
+
+  // 1) Standard <img>
+  const cur = el.currentSrc || "";
+  const src = el.getAttribute?.("src") || "";
+  const dataSrc = el.getAttribute?.("data-src") || el.dataset?.src || "";
+  if (cur) return cur;
+  if (src) return src;
+  if (dataSrc) return dataSrc;
+
+  // 2) srcset -> take first URL
+  const srcset = el.getAttribute?.("srcset") || "";
+  if (srcset) {
+    const first = srcset.split(",")[0]?.trim()?.split(" ")[0]?.trim() || "";
+    if (first) return first;
+  }
+
+  // 3) background-image on wrapper
+  const bg = (node.style && node.style.backgroundImage) || "";
+  const m = bg.match(/url\(["']?(.*?)["']?\)/i);
+  if (m && m[1]) return m[1];
+
+  return "";
+}
+
 function getCountryRowByISO(iso){
-  const rows = document.querySelectorAll("#countriesData .w-dyn-item");
+  const container = document.getElementById("countriesData");
+  if (!container) return null;
   const target = String(iso || "").trim().toUpperCase();
+
+  // Webflow dynamic list items are usually .w-dyn-item
+  let rows = Array.from(container.querySelectorAll(".w-dyn-item, .country-row, [data-country-row]"));
+  if (!rows.length) rows = Array.from(container.children || []);
+
   for (const row of rows) {
-    const isoEl = row.querySelector(".iso-code") || row.querySelector("[data-iso-code]");
-    const rowISO = isoEl?.textContent?.trim().toUpperCase();
+    const isoEl = row.querySelector?.(".iso-code") || row.querySelector?.("[data-iso-code]") || null;
+    const rowISO = isoEl?.textContent?.trim()?.toUpperCase?.() || "";
     if (rowISO === target) return row;
   }
   return null;
@@ -120,10 +159,21 @@ function getCountryRowByISO(iso){
 function getCountryBanner(iso, kind){
   const row = getCountryRowByISO(iso);
   if (!row) return "";
-  if (kind === "wide")   return row.querySelector("img.banner-img-1")?.src || "";
-  if (kind === "square") return row.querySelector("img.banner-img-2")?.src || "";
+
+  // Your structure: banner-img-1 / banner-img-2 inside the country row
+  const n1 = row.querySelector?.(".banner-img-1") || row.querySelector?.("img.banner-img-1") || null;
+  const n2 = row.querySelector?.(".banner-img-2") || row.querySelector?.("img.banner-img-2") || null;
+
+  if (kind === "wide")   return _ul_extractImgUrl(n1);
+  if (kind === "square") return _ul_extractImgUrl(n2);
   return "";
 }
+
+// Expose for console debugging (optional)
+try {
+  window.getCountryRowByISO = getCountryRowByISO;
+  window.getCountryBanner = getCountryBanner;
+} catch {}
 
 
 
