@@ -3,8 +3,13 @@
   window.__ULYDIA_METIER_PAGE__ = true;
   window.__METIER_PAGE_VERSION__ = "v4.8";
 
-window.__ULYDIA_METIER_SPONSOR_FINAL__ = true; // kill legacy body script v4.5
-window.__ULYDIA_PAGE_SPONSOR_SCRIPT__ = true;  // kill any older sponsor boots
+// Kill legacy scripts that still run on the page
+window.__ULYDIA_METIER_SPONSOR_FINAL__ = true;
+window.__ULYDIA_SPONSOR_BOOT__ = true;
+window.__ULYDIA_PAGE_SPONSOR_SCRIPT__ = true;
+
+console.log("[metier-page] v4.8 active - legacy killed");
+
 
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
