@@ -1,4 +1,4 @@
-/* metier-page.js — Ulydia (V3.0)
+/* metier-page.js — Ulydia (V3.2)
    - Page /metier (shell) + support /fiche-metiers/<slug>
    - Rendu full-code (WHITE theme like login/signup)
    - ✅ Keeps existing sponsor banner logic (wide + square, click -> sponsor link)
@@ -14,8 +14,8 @@
         &preview_link=https://...
 */
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V30__) return;
-  window.__ULYDIA_METIER_PAGE_V30__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V32__) return;
+  window.__ULYDIA_METIER_PAGE_V32__ = true;
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -74,9 +74,9 @@
   // STYLE (white theme like login/signup)
   // -----------------------------
   function injectCSS(){
-    if (document.getElementById("ul_metier_css_v30")) return;
+    if (document.getElementById("ul_metier_css_v32")) return;
     const style = document.createElement("style");
-    style.id = "ul_metier_css_v30";
+    style.id = "ul_metier_css_v32";
     style.textContent = `
       :root{
         --ul-font: 'Montserrat', system-ui, -apple-system, Segoe UI, Roboto, Arial;
@@ -213,12 +213,27 @@
   }
 
   function pick(obj, ...keys){
+    const base = (obj && obj.fields && typeof obj.fields === "object") ? obj.fields : obj;
     for (const k of keys){
       if (!k) continue;
-      const v = obj && obj[k];
+      const v = base && base[k];
       if (isFilled(v)) return v;
     }
     return "";
+  }
+
+  // Coerce rich-text-ish values to HTML string
+  function toHtml(v){
+    if (v == null) return "";
+    if (typeof v === "string") return v;
+    if (Array.isArray(v)) return v.filter(Boolean).map(toHtml).join("\n");
+    if (typeof v === "object") {
+      // common shapes: { html }, { value }, { text }
+      if (typeof v.html === "string") return v.html;
+      if (typeof v.value === "string") return v.value;
+      if (typeof v.text === "string") return v.text;
+    }
+    return String(v);
   }
 
   // HTML escape for safe text interpolation inside template strings
@@ -251,13 +266,14 @@
   }
 
   function sectionCard(title, html){
-    if (!isFilled(html)) return null;
+    const h = toHtml(html);
+    if (!isFilled(h)) return null;
     return el("div", { class:"u-card" }, [
       el("div", { class:"u-card-h" }, [
         el("p", { class:"u-card-t", html: title })
       ]),
       el("div", { class:"u-card-b" }, [
-        el("div", { class:"u-rich", html: String(html) })
+        el("div", { class:"u-rich", html: String(h) })
       ])
     ]);
   }
@@ -410,7 +426,7 @@
 
     const out = [];
     for (const [label, key] of fields){
-      const html = pick(paysBloc, key, key.toLowerCase());
+      const html = toHtml(pick(paysBloc, key, key.toLowerCase()));
       if (isFilled(html)) out.push({ label, html });
     }
     return out;
@@ -431,15 +447,17 @@
       sponsor.active === "1";
 
     // --- Metier fields (your real names)
-    const title   = pick(metier, "Nom", "name", "title", "titre") || (detectSlug() || "Metier");
+    // Prefer human label from CMS, never fall back to slug unless CMS is empty
+    const title   = pick(metier, "Nom", "nom", "name", "title", "titre") || (detectSlug() || "Metier");
     const accroche = pick(metier, "accroche", "tagline", "summary");
 
-    const htmlDescription = pick(metier, "description");
-    const htmlMissions    = pick(metier, "missions");
-    const htmlCompetences = pick(metier, "Compétences", "Competences", "competences");
-    const htmlEnv         = pick(metier, "environnements");
-    const htmlProfil      = pick(metier, "profil_recherche");
-    const htmlEvol        = pick(metier, "evolutions_possibles");
+    // Rich text fields may come as HTML string OR object; normalize via toHtml()
+    const htmlDescription = toHtml(pick(metier, "description"));
+    const htmlMissions    = toHtml(pick(metier, "missions"));
+    const htmlCompetences = toHtml(pick(metier, "Compétences", "Competences", "competences"));
+    const htmlEnv         = toHtml(pick(metier, "environnements"));
+    const htmlProfil      = toHtml(pick(metier, "profil_recherche"));
+    const htmlEvol        = toHtml(pick(metier, "evolutions_possibles"));
 
     // --- Banner logic (KEEP AS-IS)
     let wideUrl = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2 || sponsor.sponsor_logo_2) : (pays?.banners?.wide || "");
