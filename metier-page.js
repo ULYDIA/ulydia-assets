@@ -1,4 +1,4 @@
-/* metier-page.js — Ulydia (V2)
+/* metier-page.js — Ulydia (V2.1 + Preview Patch)
    - Shell page /metier
    - Rendu full-code (style dashboard/login)
    - Sponsor banners wide/square (click -> sponsor link)
@@ -21,6 +21,32 @@
   const IPINFO_TOKEN = window.ULYDIA_IPINFO_TOKEN || "";
 
   const qp = (k) => new URLSearchParams(location.search).get(k);
+
+  // =======================
+  // PREVIEW OVERRIDES (non-destructive)
+  // - Enables /sponsorship page to preview new images/links without saving
+  // - Only active when ?preview=1
+  // =======================
+  const PREVIEW = (() => {
+    const q = new URLSearchParams(location.search);
+    const on = q.get("preview") === "1";
+    return {
+      on,
+      country: String(q.get("country") || "").trim().toUpperCase(),
+      landscape: String(q.get("preview_landscape") || "").trim(),
+      square: String(q.get("preview_square") || "").trim(),
+      link: String(q.get("preview_link") || "").trim(),
+    };
+  })();
+
+  const isHttpUrl = (u) => /^https?:\/\//i.test(String(u || "").trim());
+
+  function withPreviewBust(url){
+    if (!PREVIEW.on) return url;
+    if (!isHttpUrl(url)) return url;
+    const sep = url.includes("?") ? "&" : "?";
+    return url + sep + "pv=" + Date.now();
+  }
 
   // -----------------------------
   // ROOT
@@ -223,30 +249,12 @@
     ROOT.appendChild(wrap);
   }
 
-
-// =======================
-// PREVIEW OVERRIDES
-// =======================
-const PREVIEW = (() => {
-  const q = new URLSearchParams(location.search);
-  const on = q.get("preview") === "1";
-  return {
-    on,
-    country: (q.get("country") || "").toUpperCase(),
-    landscape: q.get("preview_landscape") || "",
-    square: q.get("preview_square") || "",
-    link: q.get("preview_link") || "",
-  };
-})();
-const isHttpUrl = (u) => /^https?:\/\//i
-
-
-
-
   // -----------------------------
   // ISO detection
   // -----------------------------
   async function detectISO(){
+    if (PREVIEW.on && PREVIEW.country) return PREVIEW.country;
+
     const isoQP = (qp("iso") || qp("country") || "").trim().toUpperCase();
     if (isoQP) return isoQP;
 
@@ -310,10 +318,22 @@ const isHttpUrl = (u) => /^https?:\/\//i
     const desc  = metier.description || metier.desc || metier.summary || "";
     const tags  = metier.tags || metier.keywords || [];
 
-    // Banner logic
-    const sponsorWide = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2) : (pays?.banners?.wide || "");
-    const sponsorSq   = sponsorActive ? (sponsor.logo_square || sponsor.logo_1) : (pays?.banners?.square || "");
-    const clickLink   = sponsorActive ? (sponsor.link || sponsor.url) : (pays?.banners?.link || "/sponsorship");
+    // Banner logic (default)
+    let sponsorWide = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2) : (pays?.banners?.wide || "");
+    let sponsorSq   = sponsorActive ? (sponsor.logo_square || sponsor.logo_1) : (pays?.banners?.square || "");
+    let clickLink   = sponsorActive ? (sponsor.link || sponsor.url) : (pays?.banners?.link || "/sponsorship");
+
+    // ✅ Preview override (only when ?preview=1)
+    // Allows Sponsorship page to preview new images/links without saving
+    if (PREVIEW.on) {
+      if (isHttpUrl(PREVIEW.landscape)) sponsorWide = PREVIEW.landscape;
+      if (isHttpUrl(PREVIEW.square)) sponsorSq = PREVIEW.square;
+      if (isHttpUrl(PREVIEW.link)) clickLink = PREVIEW.link;
+
+      // Avoid browser cache when swapping images repeatedly in preview
+      sponsorWide = withPreviewBust(sponsorWide);
+      sponsorSq   = withPreviewBust(sponsorSq);
+    }
 
     ROOT.innerHTML = "";
 
