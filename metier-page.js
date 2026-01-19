@@ -1,10 +1,11 @@
-/* metier-page.js — Ulydia (V2.2)
+/* metier-page.js — Ulydia (V3.0)
    - Page /metier (shell) + support /fiche-metiers/<slug>
-   - Rendu full-code (style dashboard/login)
-   - Sponsor banners wide/square (click -> sponsor link)
+   - Rendu full-code (WHITE theme like login/signup)
+   - ✅ Keeps existing sponsor banner logic (wide + square, click -> sponsor link)
    - Fallback non sponsor: banners by pays.langue_finale
-   - Blocs “metier_pays_bloc” (optional)
-   - FAQ (optional)
+   - ✅ Metier fields integration (rich text sections)
+   - ✅ Metier_Pays_Bloc (optional, only if present for job+iso)
+   - ✅ FAQ (optional)
    - ✅ Preview overrides via query:
         ?preview=1
         &country=FR
@@ -13,8 +14,8 @@
         &preview_link=https://...
 */
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V22__) return;
-  window.__ULYDIA_METIER_PAGE_V22__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V30__) return;
+  window.__ULYDIA_METIER_PAGE_V30__ = true;
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -70,109 +71,119 @@
   }
 
   // -----------------------------
-  // STYLE
+  // STYLE (white theme like login/signup)
   // -----------------------------
   function injectCSS(){
-    if (document.getElementById("ul_metier_css")) return;
+    if (document.getElementById("ul_metier_css_v30")) return;
     const style = document.createElement("style");
-    style.id = "ul_metier_css";
+    style.id = "ul_metier_css_v30";
     style.textContent = `
       :root{
         --ul-font: 'Montserrat', system-ui, -apple-system, Segoe UI, Roboto, Arial;
         --ul-red:#c00102;
-        --ul-bg:#0b0b0c;
-        --ul-card:#121214;
-        --ul-card2:#0f0f11;
-        --ul-border: rgba(255,255,255,.10);
-        --ul-text: rgba(255,255,255,.92);
-        --ul-muted: rgba(255,255,255,.68);
-        --ul-soft: rgba(255,255,255,.06);
-        --ul-shadow: 0 10px 30px rgba(0,0,0,.35);
+        --ul-bg:#f6f7fb;
+        --ul-card:#ffffff;
+        --ul-border: rgba(20,20,20,.14);
+        --ul-text: #111827;
+        --ul-muted: #6b7280;
+        --ul-soft: rgba(17,24,39,.06);
+        --ul-shadow: 0 14px 38px rgba(17,24,39,.10);
         --ul-radius: 18px;
       }
 
       html,body{ background: var(--ul-bg); color: var(--ul-text); }
       #ulydia-metier-root{ font-family: var(--ul-font); }
 
-      .u-wrap{ max-width: 1120px; margin: 0 auto; padding: 28px 16px 80px; }
-      .u-topbar{ display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom: 16px; }
-      .u-brand{ display:flex; flex-direction:column; gap:2px; }
-      .u-title{ font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin:0; }
-      .u-sub{ font-size: 13px; color: var(--ul-muted); margin:0; }
+      .u-wrap{ max-width: 1120px; margin: 0 auto; padding: 36px 16px 90px; }
 
-      .u-grid{ display:grid; grid-template-columns: 1.15fr .85fr; gap: 16px; margin-top: 14px; }
+      /* “card container” like login/signup */
+      .u-shell{
+        background: var(--ul-card);
+        border: 2px solid rgba(17,24,39,.10);
+        border-radius: 26px;
+        box-shadow: 0 18px 55px rgba(17,24,39,.10);
+        padding: 22px;
+      }
+
+      .u-topbar{ display:flex; gap:14px; align-items:flex-start; justify-content:space-between; margin-bottom: 16px; flex-wrap:wrap; }
+      .u-brand{ display:flex; flex-direction:column; gap:6px; }
+      .u-title{ font-size: 34px; font-weight: 800; letter-spacing: -0.03em; margin:0; color: var(--ul-text); }
+      .u-title .u-red{ color: var(--ul-red); }
+      .u-tagline{ font-size: 15px; color: var(--ul-muted); margin:0; line-height:1.55; max-width: 820px; }
+      .u-sub{ font-size: 12px; color: var(--ul-muted); margin:0; }
+
+      .u-actions{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+
+      .u-grid{ display:grid; grid-template-columns: 1.20fr .80fr; gap: 16px; margin-top: 14px; }
       @media (max-width: 980px){ .u-grid{ grid-template-columns: 1fr; } }
 
       .u-card{
-        background: linear-gradient(180deg, var(--ul-card), var(--ul-card2));
-        border: 1px solid var(--ul-border);
+        background: var(--ul-card);
+        border: 2px solid rgba(17,24,39,.08);
         border-radius: var(--ul-radius);
         box-shadow: var(--ul-shadow);
         overflow:hidden;
       }
-      .u-card-h{ padding: 16px 18px; border-bottom: 1px solid var(--ul-border); display:flex; gap:10px; align-items:center; justify-content:space-between; }
-      .u-card-t{ font-size: 14px; font-weight: 700; margin:0; }
+      .u-card-h{ padding: 16px 18px; border-bottom: 1px solid rgba(17,24,39,.10); display:flex; gap:10px; align-items:center; justify-content:space-between; }
+      .u-card-t{ font-size: 13px; font-weight: 800; margin:0; letter-spacing:.02em; text-transform:uppercase; color: #374151; }
       .u-card-b{ padding: 16px 18px; }
 
-      .u-badges{ display:flex; flex-wrap:wrap; gap:8px; }
-      .u-badge{
-        font-size: 12px;
-        padding: 6px 10px;
-        border-radius: 999px;
-        background: var(--ul-soft);
-        border: 1px solid var(--ul-border);
-        color: var(--ul-muted);
-      }
-
       .u-btn{
-        appearance:none; border:1px solid var(--ul-border);
-        background: rgba(255,255,255,.06);
-        color: var(--ul-text);
-        padding: 10px 12px; border-radius: 12px;
-        cursor:pointer; font-weight: 600; font-size: 13px;
-        transition: transform .12s ease, background .12s ease;
+        appearance:none; border:2px solid rgba(17,24,39,.18);
+        background: #fff;
+        color: #374151;
+        padding: 12px 14px; border-radius: 16px;
+        cursor:pointer; font-weight: 800; font-size: 13px;
+        transition: transform .10s ease, box-shadow .10s ease;
         text-decoration:none; display:inline-flex; gap:8px; align-items:center;
       }
-      .u-btn:hover{ transform: translateY(-1px); background: rgba(255,255,255,.085); }
-      .u-btn-primary{ border-color: rgba(192,1,2,.55); background: rgba(192,1,2,.14); }
-      .u-btn-primary:hover{ background: rgba(192,1,2,.20); }
+      .u-btn:hover{ transform: translateY(-1px); box-shadow: 0 10px 24px rgba(17,24,39,.10); }
+      .u-btn-primary{
+        border-color: rgba(192,1,2,.45);
+        background: var(--ul-red);
+        color: #fff;
+      }
+      .u-btn-primary:hover{ filter: brightness(1.03); }
 
       .u-banner{
         display:block;
-        border-radius: 16px;
+        border-radius: 18px;
         overflow:hidden;
-        border: 1px solid var(--ul-border);
-        background: rgba(255,255,255,.03);
-        box-shadow: 0 12px 28px rgba(0,0,0,.25);
+        border: 2px solid rgba(17,24,39,.08);
+        background: #fff;
+        box-shadow: 0 14px 38px rgba(17,24,39,.10);
       }
       .u-banner img{ display:block; width:100%; height:auto; }
 
       .u-stack{ display:flex; flex-direction:column; gap: 12px; }
-      .u-sep{ height:1px; background: var(--ul-border); margin: 14px 0; }
-      .u-p{ margin:0; color: var(--ul-muted); line-height: 1.55; font-size: 14px; }
-      .u-h2{ margin:0; font-size: 18px; font-weight: 800; letter-spacing: -.01em; }
-      .u-h3{ margin:0; font-size: 14px; font-weight: 800; }
-
-      .u-skel{
-        border-radius: 14px; background: rgba(255,255,255,.05);
-        border: 1px solid var(--ul-border);
-        height: 14px;
-        position: relative;
-        overflow: hidden;
-      }
-      .u-skel:before{
-        content:""; position:absolute; inset:-40% -30%;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
-        transform: translateX(-40%);
-        animation: uShimmer 1.1s infinite;
-      }
-      @keyframes uShimmer{ to{ transform: translateX(40%);} }
-
-      details.u-faq{ border:1px solid var(--ul-border); border-radius: 14px; background: rgba(255,255,255,.03); padding: 10px 12px; }
-      details.u-faq summary{ cursor:pointer; font-weight:700; color: var(--ul-text); }
-      details.u-faq .u-p{ margin-top: 8px; }
+      .u-sep{ height:1px; background: rgba(17,24,39,.10); margin: 12px 0; }
       .u-note{ font-size: 12px; color: var(--ul-muted); }
-      .u-err{ border-color: rgba(192,1,2,.55)!important; background: rgba(192,1,2,.10)!important; }
+
+      /* Rich text rendering (Airtable/Webflow) */
+      .u-rich{ color: #374151; font-size: 14px; line-height: 1.75; }
+      .u-rich p{ margin: 0 0 10px; }
+      .u-rich p:last-child{ margin-bottom: 0; }
+      .u-rich ul, .u-rich ol{ margin: 8px 0 12px 20px; }
+      .u-rich li{ margin: 6px 0; }
+      .u-rich a{ color: var(--ul-red); font-weight: 800; text-decoration: none; }
+      .u-rich a:hover{ text-decoration: underline; }
+      .u-rich h3{ margin: 14px 0 8px; font-size: 15px; }
+
+      .u-kpis{ display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+      .u-kpi{
+        border: 2px solid rgba(17,24,39,.08);
+        border-radius: 16px;
+        padding: 12px;
+        background: #fff;
+      }
+      .u-kpi .k{ font-size: 12px; color: var(--ul-muted); font-weight: 800; letter-spacing:.02em; text-transform:uppercase; }
+      .u-kpi .v{ font-size: 16px; font-weight: 900; color: var(--ul-text); margin-top: 6px; }
+
+      details.u-faq{ border:2px solid rgba(17,24,39,.08); border-radius: 16px; background: #fff; padding: 10px 12px; }
+      details.u-faq summary{ cursor:pointer; font-weight:900; color: #111827; }
+      details.u-faq .u-rich{ margin-top: 8px; }
+
+      .u-err{ border-color: rgba(192,1,2,.45)!important; background: rgba(192,1,2,.06)!important; }
     `;
     document.head.appendChild(style);
   }
@@ -192,35 +203,22 @@
     return n;
   }
 
-  function renderLoading(){
-    ROOT.innerHTML = "";
-    const wrap = el("div", { class:"u-wrap" }, [
-      el("div", { class:"u-topbar" }, [
-        el("div", { class:"u-brand" }, [
-          el("h1", { class:"u-title", html:"Loading…" }),
-          el("p", { class:"u-sub", html:"Fetching CMS data & sponsor banners" })
-        ]),
-        el("a", { class:"u-btn", href:"/", html:"Home" })
-      ]),
-      el("div", { class:"u-grid" }, [
-        el("div", { class:"u-card" }, [
-          el("div", { class:"u-card-h" }, [
-            el("p", { class:"u-card-t", html:"Overview" }),
-            el("span", { class:"u-note", html: PREVIEW.on ? "Preview mode" : "" })
-          ]),
-          el("div", { class:"u-card-b u-stack" }, [
-            el("div", { class:"u-skel", style:"width:70%" }),
-            el("div", { class:"u-skel", style:"width:95%" }),
-            el("div", { class:"u-skel", style:"width:88%" }),
-          ])
-        ]),
-        el("div", { class:"u-stack" }, [
-          el("div", { class:"u-skel", style:"height:120px" }),
-          el("div", { class:"u-skel", style:"height:120px" })
-        ])
-      ])
-    ]);
-    ROOT.appendChild(wrap);
+  function isFilled(v){
+    if (v == null) return false;
+    if (typeof v === "string") return v.trim().length > 0;
+    if (Array.isArray(v)) return v.filter(Boolean).length > 0;
+    if (typeof v === "number") return true;
+    if (typeof v === "object") return Object.keys(v).length > 0;
+    return !!v;
+  }
+
+  function pick(obj, ...keys){
+    for (const k of keys){
+      if (!k) continue;
+      const v = obj && obj[k];
+      if (isFilled(v)) return v;
+    }
+    return "";
   }
 
   function safeUrl(u){
@@ -242,17 +240,58 @@
     return a;
   }
 
+  function sectionCard(title, html){
+    if (!isFilled(html)) return null;
+    return el("div", { class:"u-card" }, [
+      el("div", { class:"u-card-h" }, [
+        el("p", { class:"u-card-t", html: title })
+      ]),
+      el("div", { class:"u-card-b" }, [
+        el("div", { class:"u-rich", html: String(html) })
+      ])
+    ]);
+  }
+
+  function renderLoading(){
+    ROOT.innerHTML = "";
+    const wrap = el("div", { class:"u-wrap" }, [
+      el("div", { class:"u-shell" }, [
+        el("div", { class:"u-topbar" }, [
+          el("div", { class:"u-brand" }, [
+            el("h1", { class:"u-title", html:"<span class='u-red'>Loading</span> job…" }),
+            el("p", { class:"u-tagline", html:"Fetching CMS data & sponsor banners" })
+          ])
+        ]),
+        el("div", { class:"u-grid" }, [
+          el("div", { class:"u-card" }, [
+            el("div", { class:"u-card-h" }, [ el("p", { class:"u-card-t", html:"Overview" }) ]),
+            el("div", { class:"u-card-b" }, [
+              el("p", { class:"u-note", html:"Please wait…" })
+            ])
+          ]),
+          el("div", { class:"u-card" }, [
+            el("div", { class:"u-card-h" }, [ el("p", { class:"u-card-t", html:"Sponsor" }) ]),
+            el("div", { class:"u-card-b" }, [ el("p", { class:"u-note", html:"Loading banners…" }) ])
+          ])
+        ])
+      ])
+    ]);
+    ROOT.appendChild(wrap);
+  }
+
   function renderError(msg){
     ROOT.innerHTML = "";
     const wrap = el("div", { class:"u-wrap" }, [
-      el("div", { class:"u-card u-err" }, [
-        el("div", { class:"u-card-h" }, [
-          el("p", { class:"u-card-t", html:"Could not render this job page" }),
-          el("span", { class:"u-note", html:"metier-page.js" })
-        ]),
-        el("div", { class:"u-card-b u-stack" }, [
-          el("p", { class:"u-p", html: String(msg || "Unknown error") }),
-          el("p", { class:"u-note", html:"Tip: /metier?metier=SLUG&country=FR (preview: add &preview=1)" })
+      el("div", { class:"u-shell" }, [
+        el("div", { class:"u-card u-err" }, [
+          el("div", { class:"u-card-h" }, [
+            el("p", { class:"u-card-t", html:"Could not render this job page" }),
+            el("span", { class:"u-note", html:"metier-page.js" })
+          ]),
+          el("div", { class:"u-card-b u-stack" }, [
+            el("div", { class:"u-rich", html: String(msg || "Unknown error") }),
+            el("div", { class:"u-note", html:"Tip: /metier?metier=SLUG&country=FR (preview: add &preview=1)" })
+          ])
         ])
       ])
     ]);
@@ -263,7 +302,6 @@
   // ISO detection
   // -----------------------------
   async function detectISO(){
-    // if preview gives country, it wins
     if (PREVIEW.on && PREVIEW.country) return PREVIEW.country;
 
     const isoQP = (qp("iso") || qp("country") || "").trim().toUpperCase();
@@ -317,6 +355,58 @@
   }
 
   // -----------------------------
+  // Rendering helpers for Metier_Pays_Bloc
+  // -----------------------------
+  function formatMoneyRange(min, max, currency){
+    const cur = currency || "";
+    const hasMin = typeof min === "number" && !Number.isNaN(min);
+    const hasMax = typeof max === "number" && !Number.isNaN(max);
+    if (!hasMin && !hasMax) return "";
+    const fmt = (n) => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    if (hasMin && hasMax) return `${fmt(min)}–${fmt(max)} ${cur}`.trim();
+    if (hasMin) return `From ${fmt(min)} ${cur}`.trim();
+    return `Up to ${fmt(max)} ${cur}`.trim();
+  }
+
+  function renderPaysBlocCards(paysBloc){
+    if (!paysBloc || !isFilled(paysBloc)) return [];
+
+    // Rich text blocks (only if filled)
+    const fields = [
+      ["Formation", "formation_bloc"],
+      ["Accès", "acces_bloc"],
+      ["Salaire", "salaire_bloc"],
+      ["Marché", "marche_bloc"],
+      ["Education level (local)", "Education_level_local"],
+      ["Top fields", "Top_fields"],
+      ["Certifications", "Certifications"],
+      ["Schools or paths", "Schools_or_paths"],
+      ["Equivalences / reconversion", "Equivalences_reconversion"],
+      ["Entry routes", "Entry_routes"],
+      ["First job titles", "First_job_titles"],
+      ["Typical employers", "Typical_employers"],
+      ["Portfolio projects", "Portfolio_projects"],
+      ["Skills (must-have)", "Skills_must_have"],
+      ["Soft skills", "Soft_skills"],
+      ["Tools stack", "Tools_stack"],
+      ["Time to employability", "Time_to_employability"],
+      ["Hiring sectors", "Hiring_sectors"],
+      ["Degrees examples", "Degrees_examples"],
+      ["Growth outlook", "Growth_outlook"],
+      ["Market demand", "Market_demand"],
+      ["Education level", "education_level"],
+      ["Salary notes", "salary_notes"],
+    ];
+
+    const out = [];
+    for (const [label, key] of fields){
+      const html = pick(paysBloc, key, key.toLowerCase());
+      if (isFilled(html)) out.push({ label, html });
+    }
+    return out;
+  }
+
+  // -----------------------------
   // Render
   // -----------------------------
   function renderPage(data){
@@ -330,14 +420,21 @@
       sponsor.active === 1 ||
       sponsor.active === "1";
 
-    const title = metier.name || metier.titre || metier.title || (detectSlug() || "Job");
-    const desc  = metier.description || metier.desc || metier.summary || "";
-    const tags  = metier.tags || metier.keywords || [];
+    // --- Metier fields (your real names)
+    const title   = pick(metier, "Nom", "name", "title", "titre") || (detectSlug() || "Metier");
+    const accroche = pick(metier, "accroche", "tagline", "summary");
 
-    // Normal behavior
-    let wideUrl = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2) : (pays?.banners?.wide || "");
-    let sqUrl   = sponsorActive ? (sponsor.logo_square || sponsor.logo_1) : (pays?.banners?.square || "");
-    let linkUrl = sponsorActive ? (sponsor.link || sponsor.url) : (pays?.banners?.link || "/sponsorship");
+    const htmlDescription = pick(metier, "description");
+    const htmlMissions    = pick(metier, "missions");
+    const htmlCompetences = pick(metier, "Compétences", "Competences", "competences");
+    const htmlEnv         = pick(metier, "environnements");
+    const htmlProfil      = pick(metier, "profil_recherche");
+    const htmlEvol        = pick(metier, "evolutions_possibles");
+
+    // --- Banner logic (KEEP AS-IS)
+    let wideUrl = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2 || sponsor.sponsor_logo_2) : (pays?.banners?.wide || "");
+    let sqUrl   = sponsorActive ? (sponsor.logo_square || sponsor.logo_1 || sponsor.sponsor_logo_1) : (pays?.banners?.square || "");
+    let linkUrl = sponsorActive ? (sponsor.link || sponsor.url || sponsor.lien_sponsor) : (pays?.banners?.link || "/sponsorship");
 
     // Preview overrides (preview=1 only)
     if (PREVIEW.on) {
@@ -350,107 +447,202 @@
     wideUrl = withCacheBust(wideUrl);
     sqUrl   = withCacheBust(sqUrl);
 
+    // --- Metier_Pays_Bloc (optional)
+    const bloc = Array.isArray(data.blocs_pays) && data.blocs_pays.length ? data.blocs_pays[0] : null;
+    const blocExists = !!bloc;
+
+    // Sidebar KPIs (from bloc)
+    const currency = pick(bloc || {}, "Currency", "currency") || "";
+    const salaryJunior = formatMoneyRange(bloc?.salary_junior_min, bloc?.salary_junior_max, currency);
+    const salaryMid    = formatMoneyRange(bloc?.salary_mid_min,    bloc?.salary_mid_max,    currency);
+    const salarySenior = formatMoneyRange(bloc?.salary_senior_min, bloc?.salary_senior_max, currency);
+    const variableShare = (typeof bloc?.salary_variable_share === "number") ? `${bloc.salary_variable_share}%` : "";
+
+    const remoteLevel   = pick(bloc || {}, "Remote_level", "remote_level");
+    const automationRisk = pick(bloc || {}, "Automation_risk", "automation_risk");
+
+    // Build country-block rich cards
+    const paysCards = blocExists ? renderPaysBlocCards(bloc) : [];
+
+    // ------------------
+    // Build DOM
+    // ------------------
     ROOT.innerHTML = "";
+
     const wrap = el("div", { class:"u-wrap" });
+    const shell = el("div", { class:"u-shell" });
 
     const top = el("div", { class:"u-topbar" }, [
       el("div", { class:"u-brand" }, [
-        el("h1", { class:"u-title", html: title }),
+        el("h1", { class:"u-title", html: `${title}` }),
+        accroche ? el("p", { class:"u-tagline", html: accroche }) : el("p", { class:"u-tagline", html: "" }),
         el("p", { class:"u-sub", html:
-          `Country: <b>${(data.iso || pays.iso || "").toString()}</b> • Language: <b>${(data.lang || pays.langue_finale || "").toString()}</b>` +
-          (PREVIEW.on ? ` • <b>Preview</b>` : ``)
+          `Country: <b>${String(data.iso || pays.code_iso || pays.iso || "").toUpperCase()}</b>` +
+          ` • Language: <b>${String(data.lang || pays.langue_finale || bloc?.lang || "").toLowerCase()}</b>` +
+          (PREVIEW.on ? ` • <b style="color:var(--ul-red)">Preview</b>` : ``)
         })
       ]),
-      el("div", { style:"display:flex; gap:10px; align-items:center; flex-wrap:wrap;" }, [
+      el("div", { class:"u-actions" }, [
+        el("a", { class:"u-btn", href:"/", html:"Home" }),
         el("a", { class:"u-btn", href:"/my-account", html:"My account" }),
-        el("a", { class:"u-btn u-btn-primary", href:"/sponsorship", html:"Sponsor this page" })
+        el("a", { class:"u-btn u-btn-primary", href:"/sponsorship", html:"Sponsor this job" })
       ])
     ]);
 
-    const wide = bannerAnchor(wideUrl, linkUrl);
+    const wide = isFilled(wideUrl) ? bannerAnchor(wideUrl, linkUrl) : null;
 
-    const leftCard = el("div", { class:"u-card" }, [
+    // LEFT CONTENT
+    const leftStack = el("div", { class:"u-stack" });
+
+    // Overview card (description)
+    if (isFilled(htmlDescription)) leftStack.appendChild(sectionCard("Overview", htmlDescription));
+
+    // Metier rich sections
+    const secMap = [
+      ["Missions", htmlMissions],
+      ["Compétences", htmlCompetences],
+      ["Environnements", htmlEnv],
+      ["Profil recherché", htmlProfil],
+      ["Évolutions possibles", htmlEvol],
+    ];
+    for (const [label, html] of secMap){
+      if (isFilled(html)) leftStack.appendChild(sectionCard(label, html));
+    }
+
+    // Country specifics (only if bloc exists)
+    if (blocExists && paysCards.length){
+      const countryWrap = el("div", { class:"u-card" }, [
+        el("div", { class:"u-card-h" }, [
+          el("p", { class:"u-card-t", html:"Country specifics" }),
+          el("span", { class:"u-note", html: `${String(data.iso || bloc?.country_code || "").toUpperCase()}` })
+        ]),
+        el("div", { class:"u-card-b u-stack" })
+      ]);
+      const body = countryWrap.querySelector(".u-card-b");
+      paysCards.forEach(({ label, html }) => {
+        body.appendChild(
+          el("div", { class:"u-card", style:"box-shadow:none;" }, [
+            el("div", { class:"u-card-h" }, [ el("p", { class:"u-card-t", html: label }) ]),
+            el("div", { class:"u-card-b" }, [ el("div", { class:"u-rich", html: String(html) }) ])
+          ])
+        );
+      });
+      leftStack.appendChild(countryWrap);
+    }
+
+    // FAQ (optional)
+    if (Array.isArray(data.faq) && data.faq.length){
+      const faqCard = el("div", { class:"u-card" }, [
+        el("div", { class:"u-card-h" }, [ el("p", { class:"u-card-t", html:"FAQ" }) ]),
+        el("div", { class:"u-card-b u-stack" })
+      ]);
+      const faqBody = faqCard.querySelector(".u-card-b");
+      data.faq.forEach(item => {
+        const q = item.q || item.question || "Question";
+        const a = item.a || item.answer || "";
+        if (!isFilled(q) || !isFilled(a)) return;
+        faqBody.appendChild(
+          el("details", { class:"u-faq" }, [
+            el("summary", { html: q }),
+            el("div", { class:"u-rich", html: String(a) })
+          ])
+        );
+      });
+      leftStack.appendChild(faqCard);
+    }
+
+    // RIGHT SIDEBAR
+    const rightStack = el("div", { class:"u-stack" });
+
+    // Sponsor card
+    const sponsorName = pick(sponsor, "name", "sponsor_name", "sponsor") || pick(metier, "sponsor_name") || "";
+    const sponsorCard = el("div", { class:"u-card" }, [
       el("div", { class:"u-card-h" }, [
-        el("p", { class:"u-card-t", html:"Overview" }),
-        el("span", { class:"u-note", html: sponsorActive ? `Sponsored by ${sponsor.name || "partner"}` : "Not sponsored" })
+        el("p", { class:"u-card-t", html:"Sponsor" }),
+        el("span", { class:"u-note", html: sponsorActive ? "Active" : "Available" })
       ]),
       el("div", { class:"u-card-b u-stack" }, [
-        (tags && tags.length)
-          ? el("div", { class:"u-badges" }, tags.slice(0,12).map(t => el("span", { class:"u-badge", html: String(t) })))
-          : el("p", { class:"u-p", html:"" }),
-
-        desc ? el("p", { class:"u-p", html: desc }) : el("p", { class:"u-p", html:"" }),
-
-        el("div", { class:"u-sep" }),
-
-        el("div", { class:"u-stack" }, [
-          el("p", { class:"u-h2", html:"Country-specific blocks" }),
-          ...(Array.isArray(data.blocs_pays) && data.blocs_pays.length
-            ? data.blocs_pays
-                .sort((a,b)=>(a.order||0)-(b.order||0))
-                .map(b => el("div", { class:"u-card", style:"box-shadow:none; border-radius:16px;" }, [
-                  el("div", { class:"u-card-h" }, [
-                    el("p", { class:"u-card-t", html: b.title || "Block" }),
-                    el("span", { class:"u-note", html:"" })
-                  ]),
-                  el("div", { class:"u-card-b" }, [
-                    el("div", { class:"u-p", html: b.html || b.text || "" })
-                  ])
-                ]))
-            : [ el("p", { class:"u-p", html:"No country-specific blocks available yet for this job in this country." }) ]
-          )
-        ]),
-
-        el("div", { class:"u-sep" }),
-
-        el("div", { class:"u-stack" }, [
-          el("p", { class:"u-h2", html:"FAQ" }),
-          ...(Array.isArray(data.faq) && data.faq.length
-            ? data.faq.map(item => {
-                const q = item.q || item.question || "Question";
-                const a = item.a || item.answer || "";
-                return el("details", { class:"u-faq" }, [
-                  el("summary", { html: q }),
-                  el("div", { class:"u-p", html: a })
-                ]);
-              })
-            : [ el("p", { class:"u-p", html:"No FAQ for now." }) ]
-          )
-        ])
+        isFilled(sqUrl) ? bannerAnchor(sqUrl, linkUrl) : el("div", { class:"u-note", html:"No sponsor logo" }),
+        isFilled(sponsorName) ? el("div", { class:"u-note", html:`<b>${sponsorName}</b>` }) : el("div", { class:"u-note", html:"" }),
+        el("a", { class: sponsorActive ? "u-btn u-btn-primary" : "u-btn u-btn-primary", href: sponsorActive ? (safeUrl(linkUrl) || "#") : "/sponsorship", target: sponsorActive ? "_blank" : "_self", rel:"noopener", html: sponsorActive ? "Visit sponsor" : "Sponsor this job" })
       ])
     ]);
 
-    const right = el("div", { class:"u-stack" }, [
-      el("div", { class:"u-card" }, [
+    // KPIs card (only if bloc exists and has values)
+    const anyKpi = isFilled(salaryJunior) || isFilled(salaryMid) || isFilled(salarySenior) || isFilled(remoteLevel) || isFilled(automationRisk) || isFilled(variableShare);
+    let kpiCard = null;
+    if (blocExists && anyKpi) {
+      const kpis = el("div", { class:"u-kpis" });
+      const addKpi = (k, v) => { if (isFilled(v)) kpis.appendChild(el("div", { class:"u-kpi" }, [ el("div", { class:"k", html: k }), el("div", { class:"v", html: v }) ])); };
+
+      addKpi("Junior", salaryJunior);
+      addKpi("Mid", salaryMid);
+      addKpi("Senior", salarySenior);
+      addKpi("Variable", variableShare);
+      addKpi("Remote", remoteLevel);
+      addKpi("Automation", automationRisk);
+
+      kpiCard = el("div", { class:"u-card" }, [
         el("div", { class:"u-card-h" }, [
-          el("p", { class:"u-card-t", html:"Sponsor banner (square)" }),
-          el("span", { class:"u-note", html:"Clickable" })
+          el("p", { class:"u-card-t", html:"Key figures" }),
+          el("span", { class:"u-note", html: currency ? esc(currency) : "" })
         ]),
-        el("div", { class:"u-card-b" }, [
-          bannerAnchor(sqUrl, linkUrl)
-        ])
-      ]),
-      el("div", { class:"u-card" }, [
-        el("div", { class:"u-card-h" }, [
-          el("p", { class:"u-card-t", html:"About sponsorship" }),
-          el("span", { class:"u-note", html:"" })
-        ]),
-        el("div", { class:"u-card-b u-stack" }, [
-          el("p", { class:"u-p", html: sponsorActive
-            ? "This page is currently sponsored. Click the banner to visit the sponsor."
-            : "This page is not sponsored yet. If you want your company displayed here, you can sponsor this job page."
-          }),
-          el("a", { class:"u-btn u-btn-primary", href:"/sponsorship", html:"Start sponsorship" })
-        ])
+        el("div", { class:"u-card-b" }, [ kpis ])
+      ]);
+    }
+
+    // Country info card
+    const countryInfo = el("div", { class:"u-card" }, [
+      el("div", { class:"u-card-h" }, [ el("p", { class:"u-card-t", html:"Country" }) ]),
+      el("div", { class:"u-card-b" }, [
+        el("div", { class:"u-note", html:
+          `<div><b>${esc(String(pays.Nom || pays.name || pays.country || ""))}</b></div>` +
+          `<div>ISO: <b>${esc(String(data.iso || pays.code_iso || pays.iso || "").toUpperCase())}</b></div>` +
+          (blocExists ? `<div style="margin-top:6px">Has country-specific data ✅</div>` : `<div style="margin-top:6px">No country-specific data yet</div>`)
+        })
       ])
     ]);
 
-    const grid = el("div", { class:"u-grid" }, [ leftCard, right ]);
+    rightStack.appendChild(sponsorCard);
+    if (kpiCard) rightStack.appendChild(kpiCard);
+    rightStack.appendChild(countryInfo);
 
-    wrap.appendChild(top);
-    wrap.appendChild(wide);
-    wrap.appendChild(grid);
+    const grid = el("div", { class:"u-grid" }, [ leftStack, rightStack ]);
+
+    shell.appendChild(top);
+    if (wide) shell.appendChild(wide);
+    shell.appendChild(grid);
+
+    wrap.appendChild(shell);
     ROOT.appendChild(wrap);
+
+    // Optional: SEO inject (front-only) if provided
+    // Note: Webflow might override title/meta server-side; this helps for share/preview.
+    try{
+      const mt = pick(metier, "meta_title");
+      const md = pick(metier, "meta_description");
+      if (isFilled(mt)) document.title = String(mt);
+      if (isFilled(md)) {
+        let elMeta = document.querySelector('meta[name="description"]');
+        if (!elMeta) {
+          elMeta = document.createElement('meta');
+          elMeta.setAttribute('name','description');
+          document.head.appendChild(elMeta);
+        }
+        elMeta.setAttribute('content', String(md));
+      }
+      const jsonld = pick(metier, "schema_json_ld");
+      if (isFilled(jsonld)){
+        let s = document.getElementById("ul_metier_jsonld");
+        if (!s) {
+          s = document.createElement('script');
+          s.id = 'ul_metier_jsonld';
+          s.type = 'application/ld+json';
+          document.head.appendChild(s);
+        }
+        s.textContent = String(jsonld);
+      }
+    }catch(e){ log("seo inject skipped", e); }
   }
 
   // -----------------------------
@@ -464,7 +656,7 @@
     if (!slug) throw new Error("Missing slug. Use /metier?metier=SLUG&country=FR (preview: add &preview=1)");
 
     const iso = await detectISO();
-    log("metier-page v2.2", { slug, iso, preview: PREVIEW });
+    log("metier-page v3.0", { slug, iso, preview: PREVIEW });
 
     const data = await fetchMetierPage({ slug, iso });
     renderPage(data);
