@@ -221,6 +221,16 @@
     return "";
   }
 
+  // HTML escape for safe text interpolation inside template strings
+  function esc(s = "") {
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
   function safeUrl(u){
     try{
       if (!u) return "";
