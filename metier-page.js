@@ -1,5 +1,6 @@
-/* metier-page.js — Ulydia (V2.1 + PREVIEW PATCH)
-   - Shell page /fiche-metiers/<slug> (full-code render)
+/* metier-page.js — Ulydia (V2.2)
+   - Page /metier (shell) + support /fiche-metiers/<slug>
+   - Rendu full-code (style dashboard/login)
    - Sponsor banners wide/square (click -> sponsor link)
    - Fallback non sponsor: banners by pays.langue_finale
    - Blocs “metier_pays_bloc” (optional)
@@ -12,8 +13,8 @@
         &preview_link=https://...
 */
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V21__) return;
-  window.__ULYDIA_METIER_PAGE_V21__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V22__) return;
+  window.__ULYDIA_METIER_PAGE_V22__ = true;
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -27,9 +28,9 @@
 
   const qp = (k) => new URLSearchParams(location.search).get(k);
 
-  // =======================
+  // -----------------------------
   // PREVIEW OVERRIDES
-  // =======================
+  // -----------------------------
   const isHttpUrl = (u) => /^https?:\/\//i.test(String(u || "").trim());
 
   const PREVIEW = (() => {
@@ -44,7 +45,7 @@
     };
   })();
 
-  // If preview on, bust caches for images (prevents “same image” feeling)
+  // cache-bust only in preview mode (prevents browser showing old image)
   function withCacheBust(u) {
     const s = String(u || "").trim();
     if (!PREVIEW.on || !isHttpUrl(s)) return s;
@@ -53,7 +54,6 @@
       x.searchParams.set("ulprev", String(Date.now()));
       return x.toString();
     } catch {
-      // fallback: append simple query
       return s + (s.includes("?") ? "&" : "?") + "ulprev=" + Date.now();
     }
   }
@@ -252,7 +252,7 @@
         ]),
         el("div", { class:"u-card-b u-stack" }, [
           el("p", { class:"u-p", html: String(msg || "Unknown error") }),
-          el("p", { class:"u-note", html:"Tip: try /fiche-metiers/SLUG?country=FR (or ?iso=FR). Preview: add &preview=1" })
+          el("p", { class:"u-note", html:"Tip: /metier?metier=SLUG&country=FR (preview: add &preview=1)" })
         ])
       ])
     ]);
@@ -263,6 +263,9 @@
   // ISO detection
   // -----------------------------
   async function detectISO(){
+    // if preview gives country, it wins
+    if (PREVIEW.on && PREVIEW.country) return PREVIEW.country;
+
     const isoQP = (qp("iso") || qp("country") || "").trim().toUpperCase();
     if (isoQP) return isoQP;
 
@@ -278,18 +281,18 @@
     }
   }
 
-  // ✅ slug detection (supports ?metier=)
+  // slug detection:
+  // - /metier?metier=slug
+  // - /metier?slug=slug
+  // - /fiche-metiers/slug
   function detectSlug(){
-    const s = (qp("slug") || qp("metier") || "").trim();
+    const s = (qp("metier") || qp("slug") || "").trim();
     if (s) return s;
 
     const parts = location.pathname.split("/").filter(Boolean);
-
-    // supports /fiche-metiers/<slug>
     const i1 = parts.indexOf("fiche-metiers");
     if (i1 >= 0 && parts[i1+1]) return parts[i1+1];
 
-    // legacy /metiers/<slug>
     const i2 = parts.indexOf("metiers");
     if (i2 >= 0 && parts[i2+1]) return parts[i2+1];
 
@@ -321,43 +324,41 @@
     const pays    = data.pays || {};
     const sponsor = data.sponsor || {};
 
-    // ✅ sponsor active can be true/"true"/1/"1"
     const sponsorActive =
       sponsor.active === true ||
       sponsor.active === "true" ||
       sponsor.active === 1 ||
       sponsor.active === "1";
 
-    const title = metier.name || metier.titre || metier.title || "Job";
+    const title = metier.name || metier.titre || metier.title || (detectSlug() || "Job");
     const desc  = metier.description || metier.desc || metier.summary || "";
     const tags  = metier.tags || metier.keywords || [];
 
-    // Base banner logic (normal behavior)
+    // Normal behavior
     let wideUrl = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2) : (pays?.banners?.wide || "");
     let sqUrl   = sponsorActive ? (sponsor.logo_square || sponsor.logo_1) : (pays?.banners?.square || "");
     let linkUrl = sponsorActive ? (sponsor.link || sponsor.url) : (pays?.banners?.link || "/sponsorship");
 
-    // ✅ PREVIEW overrides (only if preview=1)
+    // Preview overrides (preview=1 only)
     if (PREVIEW.on) {
       if (isHttpUrl(PREVIEW.landscape)) wideUrl = PREVIEW.landscape;
       if (isHttpUrl(PREVIEW.square))    sqUrl   = PREVIEW.square;
       if (isHttpUrl(PREVIEW.link))      linkUrl = PREVIEW.link;
     }
 
-    // ✅ cache bust for preview images so browser really shows the latest
+    // cache-bust preview images
     wideUrl = withCacheBust(wideUrl);
     sqUrl   = withCacheBust(sqUrl);
 
     ROOT.innerHTML = "";
     const wrap = el("div", { class:"u-wrap" });
 
-    // header
     const top = el("div", { class:"u-topbar" }, [
       el("div", { class:"u-brand" }, [
         el("h1", { class:"u-title", html: title }),
         el("p", { class:"u-sub", html:
           `Country: <b>${(data.iso || pays.iso || "").toString()}</b> • Language: <b>${(data.lang || pays.langue_finale || "").toString()}</b>` +
-          (PREVIEW.on ? ` • <span style="color:rgba(255,255,255,.85)"><b>Preview</b></span>` : ``)
+          (PREVIEW.on ? ` • <b>Preview</b>` : ``)
         })
       ]),
       el("div", { style:"display:flex; gap:10px; align-items:center; flex-wrap:wrap;" }, [
@@ -366,10 +367,8 @@
       ])
     ]);
 
-    // wide banner under title
     const wide = bannerAnchor(wideUrl, linkUrl);
 
-    // layout
     const leftCard = el("div", { class:"u-card" }, [
       el("div", { class:"u-card-h" }, [
         el("p", { class:"u-card-t", html:"Overview" }),
@@ -379,6 +378,7 @@
         (tags && tags.length)
           ? el("div", { class:"u-badges" }, tags.slice(0,12).map(t => el("span", { class:"u-badge", html: String(t) })))
           : el("p", { class:"u-p", html:"" }),
+
         desc ? el("p", { class:"u-p", html: desc }) : el("p", { class:"u-p", html:"" }),
 
         el("div", { class:"u-sep" }),
@@ -450,7 +450,6 @@
     wrap.appendChild(top);
     wrap.appendChild(wide);
     wrap.appendChild(grid);
-
     ROOT.appendChild(wrap);
   }
 
@@ -462,14 +461,12 @@
     renderLoading();
 
     const slug = detectSlug();
-    if (!slug) throw new Error("Missing slug. Use /fiche-metiers/SLUG?country=FR (or ?iso=FR). Preview: add &preview=1");
+    if (!slug) throw new Error("Missing slug. Use /metier?metier=SLUG&country=FR (preview: add &preview=1)");
 
     const iso = await detectISO();
-    log("metier-page v2.1", { slug, iso, preview: PREVIEW });
+    log("metier-page v2.2", { slug, iso, preview: PREVIEW });
 
     const data = await fetchMetierPage({ slug, iso });
-    log("data", data);
-
     renderPage(data);
   }
 
