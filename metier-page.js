@@ -223,6 +223,26 @@
     ROOT.appendChild(wrap);
   }
 
+
+// =======================
+// PREVIEW OVERRIDES
+// =======================
+const PREVIEW = (() => {
+  const q = new URLSearchParams(location.search);
+  const on = q.get("preview") === "1";
+  return {
+    on,
+    country: (q.get("country") || "").toUpperCase(),
+    landscape: q.get("preview_landscape") || "",
+    square: q.get("preview_square") || "",
+    link: q.get("preview_link") || "",
+  };
+})();
+const isHttpUrl = (u) => /^https?:\/\//i
+
+
+
+
   // -----------------------------
   // ISO detection
   // -----------------------------
