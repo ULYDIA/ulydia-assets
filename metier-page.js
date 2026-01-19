@@ -1,4 +1,4 @@
-/* metier-page.js — Ulydia (V2.1 + Preview Patch)
+/* metier-page.js — Ulydia (V2)
    - Shell page /metier
    - Rendu full-code (style dashboard/login)
    - Sponsor banners wide/square (click -> sponsor link)
@@ -23,30 +23,21 @@
   const qp = (k) => new URLSearchParams(location.search).get(k);
 
   // =======================
-  // PREVIEW OVERRIDES (non-destructive)
-  // - Enables /sponsorship page to preview new images/links without saving
-  // - Only active when ?preview=1
+  // PREVIEW OVERRIDES
+  // From sponsorship page (example):
+  // /fiche-metiers/<slug>?preview=1&country=FR&preview_landscape=...&preview_square=...&preview_link=...
   // =======================
   const PREVIEW = (() => {
     const q = new URLSearchParams(location.search);
     const on = q.get("preview") === "1";
     return {
       on,
-      country: String(q.get("country") || "").trim().toUpperCase(),
-      landscape: String(q.get("preview_landscape") || "").trim(),
-      square: String(q.get("preview_square") || "").trim(),
-      link: String(q.get("preview_link") || "").trim(),
+      country: (q.get("country") || "").toUpperCase(),
+      landscape: q.get("preview_landscape") || "",
+      square: q.get("preview_square") || "",
+      link: q.get("preview_link") || "",
     };
   })();
-
-  const isHttpUrl = (u) => /^https?:\/\//i.test(String(u || "").trim());
-
-  function withPreviewBust(url){
-    if (!PREVIEW.on) return url;
-    if (!isHttpUrl(url)) return url;
-    const sep = url.includes("?") ? "&" : "?";
-    return url + sep + "pv=" + Date.now();
-  }
 
   // -----------------------------
   // ROOT
@@ -221,9 +212,21 @@
     }catch{ return ""; }
   }
 
+  // Avoid stale cached images when using preview query params.
+  function withPreviewBust(u){
+    const s = safeUrl(u);
+    if (!s || !PREVIEW.on) return s;
+    try{
+      const x = new URL(s);
+      x.searchParams.set("ul_preview", "1");
+      x.searchParams.set("ul_ts", String(Date.now()));
+      return x.href;
+    }catch{ return s; }
+  }
+
   function bannerAnchor(imgUrl, linkUrl){
     const href = safeUrl(linkUrl || "");
-    const src = safeUrl(imgUrl || "");
+    const src = withPreviewBust(imgUrl || "");
     if (!src) return el("div", { class:"u-banner", html:"" });
     const a = el("a", { class:"u-banner", href: href || "#", target: href ? "_blank" : "_self", rel:"noopener" }, [
       el("img", { src, alt:"banner" })
@@ -253,8 +256,6 @@
   // ISO detection
   // -----------------------------
   async function detectISO(){
-    if (PREVIEW.on && PREVIEW.country) return PREVIEW.country;
-
     const isoQP = (qp("iso") || qp("country") || "").trim().toUpperCase();
     if (isoQP) return isoQP;
 
@@ -314,26 +315,34 @@
       sponsor.active === 1 ||
       sponsor.active === "1";
 
+    // In preview mode, we may want to show sponsor blocks even if there is no active sponsor in Airtable.
+    const hasPreviewAssets = PREVIEW.on && (
+      isHttpUrl(PREVIEW.landscape) ||
+      isHttpUrl(PREVIEW.square) ||
+      isHttpUrl(PREVIEW.link)
+    );
+    const showSponsor = sponsorActive || hasPreviewAssets;
+
     const title = metier.name || metier.titre || metier.title || "Job";
     const desc  = metier.description || metier.desc || metier.summary || "";
     const tags  = metier.tags || metier.keywords || [];
 
-    // Banner logic (default)
-    let sponsorWide = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2) : (pays?.banners?.wide || "");
-    let sponsorSq   = sponsorActive ? (sponsor.logo_square || sponsor.logo_1) : (pays?.banners?.square || "");
-    let clickLink   = sponsorActive ? (sponsor.link || sponsor.url) : (pays?.banners?.link || "/sponsorship");
+    // Banner logic (default = sponsor if active, else country waitlist banners)
+    // ✅ Preview mode can override BOTH images and link without touching Airtable.
+    const sponsorWideRaw = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2) : (pays?.banners?.wide || "");
+    const sponsorSqRaw   = sponsorActive ? (sponsor.logo_square || sponsor.logo_1) : (pays?.banners?.square || "");
+    const clickLinkRaw   = sponsorActive ? (sponsor.link || sponsor.url) : (pays?.banners?.link || "/sponsorship");
 
-    // ✅ Preview override (only when ?preview=1)
-    // Allows Sponsorship page to preview new images/links without saving
-    if (PREVIEW.on) {
-      if (isHttpUrl(PREVIEW.landscape)) sponsorWide = PREVIEW.landscape;
-      if (isHttpUrl(PREVIEW.square)) sponsorSq = PREVIEW.square;
-      if (isHttpUrl(PREVIEW.link)) clickLink = PREVIEW.link;
-
-      // Avoid browser cache when swapping images repeatedly in preview
-      sponsorWide = withPreviewBust(sponsorWide);
-      sponsorSq   = withPreviewBust(sponsorSq);
-    }
+    // Final URLs (with preview overrides + cache busting in preview)
+    const sponsorWide = withPreviewBust(
+      isHttpUrl(PREVIEW.landscape) ? PREVIEW.landscape : sponsorWideRaw
+    );
+    const sponsorSq = withPreviewBust(
+      isHttpUrl(PREVIEW.square) ? PREVIEW.square : sponsorSqRaw
+    );
+    const clickLink = safeUrl(
+      isHttpUrl(PREVIEW.link) ? PREVIEW.link : clickLinkRaw
+    ) || "/sponsorship";
 
     ROOT.innerHTML = "";
 
@@ -358,7 +367,11 @@
     const leftCard = el("div", { class:"u-card" }, [
       el("div", { class:"u-card-h" }, [
         el("p", { class:"u-card-t", html:"Overview" }),
-        el("span", { class:"u-note", html: sponsorActive ? `Sponsored by ${sponsor.name || "partner"}` : "Not sponsored" })
+        el("span", { class:"u-note", html: showSponsor
+          ? (sponsorActive
+              ? `Sponsored by ${sponsor.name || "partner"}`
+              : `Preview mode — banners overridden`)
+          : "Not sponsored" })
       ]),
       el("div", { class:"u-card-b u-stack" }, [
         (tags && tags.length)
@@ -424,9 +437,11 @@
         el("div", { class:"u-card-b u-stack" }, [
           el("p", { class:"u-p", html: sponsorActive
             ? "This page is currently sponsored. Click the banner to visit the sponsor."
-            : "This page is not sponsored yet. If you want your company displayed here, you can sponsor this job page."
+            : (hasPreviewAssets
+                ? "Preview mode: the banners above are coming from preview parameters (they are not saved yet)."
+                : "This page is not sponsored yet. If you want your company displayed here, you can sponsor this job page.")
           }),
-          el("a", { class:"u-btn u-btn-primary", href:"/sponsorship", html:"Start sponsorship" })
+          el("a", { class:"u-btn u-btn-primary", href:"/sponsorship", html: sponsorActive ? "Manage sponsorship" : "Start sponsorship" })
         ])
       ])
     ]);
