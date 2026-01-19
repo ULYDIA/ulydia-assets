@@ -1,4 +1,4 @@
-/* metier-page.js — Ulydia (V1)
+/* metier-page.js — Ulydia (V2)
    - Shell page /metier
    - Rendu full-code (style dashboard/login)
    - Sponsor banners wide/square (click -> sponsor link)
@@ -7,8 +7,8 @@
    - FAQ (optional)
 */
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V1__) return;
-  window.__ULYDIA_METIER_PAGE_V1__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V2__) return;
+  window.__ULYDIA_METIER_PAGE_V2__ = true;
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -55,7 +55,6 @@
         --ul-radius: 18px;
       }
 
-      /* page backdrop */
       html,body{ background: var(--ul-bg); color: var(--ul-text); }
       #ulydia-metier-root{ font-family: var(--ul-font); }
 
@@ -217,7 +216,7 @@
         ]),
         el("div", { class:"u-card-b u-stack" }, [
           el("p", { class:"u-p", html: String(msg || "Unknown error") }),
-          el("p", { class:"u-note", html:"Tip: try /metier?slug=...&iso=FR" })
+          el("p", { class:"u-note", html:"Tip: try /metier?slug=...&iso=FR (or /metier?metier=...&country=FR)" })
         ])
       ])
     ]);
@@ -231,7 +230,6 @@
     const isoQP = (qp("iso") || qp("country") || "").trim().toUpperCase();
     if (isoQP) return isoQP;
 
-    // fallback ipinfo
     if (!IPINFO_TOKEN) return "FR";
     try{
       const r = await fetch(`https://ipinfo.io/json?token=${encodeURIComponent(IPINFO_TOKEN)}`, { cache: "no-store" });
@@ -244,11 +242,11 @@
     }
   }
 
+  // ✅ slug detection (supports ?metier=)
   function detectSlug(){
-    const s = (qp("slug") || "").trim();
+    const s = (qp("slug") || qp("metier") || "").trim();
     if (s) return s;
 
-    // try infer from /metiers/<slug> if you use redirects
     const parts = location.pathname.split("/").filter(Boolean);
     const i = parts.indexOf("metiers");
     if (i >= 0 && parts[i+1]) return parts[i+1];
@@ -279,16 +277,23 @@
   function renderPage(data){
     const metier = data.metier || {};
     const pays = data.pays || {};
-    const sponsor = data.sponsor || { active:false };
+    const sponsor = data.sponsor || {};
+
+    // ✅ sponsor active can be true/"true"/1/"1"
+    const sponsorActive =
+      sponsor.active === true ||
+      sponsor.active === "true" ||
+      sponsor.active === 1 ||
+      sponsor.active === "1";
 
     const title = metier.name || metier.titre || metier.title || "Job";
     const desc  = metier.description || metier.desc || metier.summary || "";
     const tags  = metier.tags || metier.keywords || [];
 
     // Banner logic
-    const sponsorWide = sponsor.active ? (sponsor.logo_wide || sponsor.logo_2) : (pays?.banners?.wide || "");
-    const sponsorSq   = sponsor.active ? (sponsor.logo_square || sponsor.logo_1) : (pays?.banners?.square || "");
-    const clickLink   = sponsor.active ? (sponsor.link || sponsor.url) : (pays?.banners?.link || "/sponsorship");
+    const sponsorWide = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2) : (pays?.banners?.wide || "");
+    const sponsorSq   = sponsorActive ? (sponsor.logo_square || sponsor.logo_1) : (pays?.banners?.square || "");
+    const clickLink   = sponsorActive ? (sponsor.link || sponsor.url) : (pays?.banners?.link || "/sponsorship");
 
     ROOT.innerHTML = "";
 
@@ -313,7 +318,7 @@
     const leftCard = el("div", { class:"u-card" }, [
       el("div", { class:"u-card-h" }, [
         el("p", { class:"u-card-t", html:"Overview" }),
-        el("span", { class:"u-note", html: sponsor.active ? `Sponsored by ${sponsor.name || "partner"}` : "Not sponsored" })
+        el("span", { class:"u-note", html: sponsorActive ? `Sponsored by ${sponsor.name || "partner"}` : "Not sponsored" })
       ]),
       el("div", { class:"u-card-b u-stack" }, [
         (tags && tags.length)
@@ -377,7 +382,7 @@
           el("span", { class:"u-note", html:"" })
         ]),
         el("div", { class:"u-card-b u-stack" }, [
-          el("p", { class:"u-p", html: sponsor.active
+          el("p", { class:"u-p", html: sponsorActive
             ? "This page is currently sponsored. Click the banner to visit the sponsor."
             : "This page is not sponsored yet. If you want your company displayed here, you can sponsor this job page."
           }),
@@ -403,7 +408,7 @@
     renderLoading();
 
     const slug = detectSlug();
-    if (!slug) throw new Error("Missing slug. Use /metier?slug=YOUR_SLUG&iso=FR");
+    if (!slug) throw new Error("Missing slug. Use /metier?slug=YOUR_SLUG&iso=FR (or /metier?metier=YOUR_SLUG&country=FR)");
 
     const iso = await detectISO();
     log("slug/iso", slug, iso);
