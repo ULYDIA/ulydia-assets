@@ -135,6 +135,11 @@
       #ulydia-metier-root .mp-rich ul, #ulydia-metier-root .mp-rich ol{ margin: 8px 0 12px 20px; }
       #ulydia-metier-root .mp-rich a{ color: var(--ul-primary); font-weight: 700; }
 
+      /* Wide banner sizing (full width + centered) */
+      #ulydia-metier-root .u-banner{ display:block; width:100%; }
+      #ulydia-metier-root .u-banner--wide{ width:100%; }
+      #ulydia-metier-root .u-banner--wide img{ width:100%; height:100%; object-fit:cover; display:block; }
+
       /* Sponsor card image */
       #ulydia-metier-root .mp-sqimg{ width: 100%; height: auto; display:block; }
 
