@@ -1,6 +1,6 @@
-/* metier-page.js — Ulydia (V5.1.1)
+/* metier-page.js — Ulydia (V5.1.2)
    ------------------------------------------------------------
-   Goals (V5.1.1)
+   Goals (V5.1.2)
    ✅ Uses Ulydia UI Kit + design tokens v2 (ulydia-ui.v2.js)
    ✅ Search bar ABOVE the job title on the Metier page
    ✅ Country (Pays) selector sourced from Webflow CMS (supports multiple ingestion methods)
@@ -285,7 +285,9 @@
     const arr = Array.isArray(raw) ? raw : [];
     return arr.map((m) => {
       const slug = pick(m.slug, m.Slug, m.metier_slug, m["Slug (auto)"], m["slug"]);
-      const name = pick(m.name, m.nom, m.title, m["Nom"], m["Métier"], m["Metier"]);
+      // Name can be missing in some Webflow exports (or mapped incorrectly).
+      // We always keep the item if slug exists, and fall back name -> slug.
+      const nameRaw = pick(m.name, m.nom, m.title, m["Nom"], m["Métier"], m["Metier"]);
       // sector reference can appear under many shapes; we try:
       // - exact label "Secteur d’activité"
       // - normalized keys
@@ -296,8 +298,9 @@
       else if (sectorField && typeof sectorField === "object") {
         secteur = pick(sectorField.id, sectorField._id, sectorField.slug, sectorField.name, sectorField.title);
       }
+      const name = (nameRaw && String(nameRaw).trim()) ? String(nameRaw).trim() : (slug ? String(slug).trim() : "");
       return { slug, name, secteur };
-    }).filter(x => x.slug && x.name);
+    }).filter(x => x.slug);
   }
 
   function debounce(fn, ms=150){
