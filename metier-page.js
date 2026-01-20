@@ -1,4 +1,4 @@
-/* metier-page.js — Ulydia (V3.3)
+/* metier-page.js — Ulydia (V3.5)
    - Page /metier (shell) + support /fiche-metiers/<slug>
    - Rendu full-code (WHITE theme like login/signup)
    - ✅ Keeps existing sponsor banner logic (wide + square, click -> sponsor link)
@@ -14,8 +14,8 @@
         &preview_link=https://...
 */
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V32__) return;
-  window.__ULYDIA_METIER_PAGE_V32__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V34__) return;
+  window.__ULYDIA_METIER_PAGE_V34__ = true;
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -79,6 +79,25 @@
       .join(" ");
   }
 
+  // If CMS title looks like a slug, humanize it
+  function humanizeTitle(raw, fallbackSlug){
+    const t = String(raw || "").trim();
+    const s = String(fallbackSlug || "").trim();
+    const candidate = t || s;
+    if (!candidate) return "Metier";
+    // slug-like: has hyphens/underscores and no spaces OR equals the slug
+    const looksSlug = (/[-_]/.test(candidate) && !/\s/.test(candidate)) || (s && candidate === s);
+    if (looksSlug) return metierSlugToTitle(candidate);
+    // if candidate is all-lowercase words, capitalize first letters
+    if (candidate === candidate.toLowerCase() && /[a-z]/.test(candidate)) {
+      return candidate
+        .split(/\s+/)
+        .map((w,i)=> i===0 ? (w.charAt(0).toUpperCase()+w.slice(1)) : w)
+        .join(" ");
+    }
+    return candidate;
+  }
+
   // -----------------------------
   // ROOT
   // -----------------------------
@@ -94,9 +113,9 @@
   // STYLE (white theme like login/signup)
   // -----------------------------
   function injectCSS(){
-    if (document.getElementById("ul_metier_css_v32")) return;
+    if (document.getElementById("ul_metier_css_v34")) return;
     const style = document.createElement("style");
-    style.id = "ul_metier_css_v32";
+    style.id = "ul_metier_css_v34";
     style.textContent = `
       :root{
         --ul-font: 'Montserrat', system-ui, -apple-system, Segoe UI, Roboto, Arial;
@@ -117,31 +136,32 @@
       .u-wrap{ max-width: 1120px; margin: 0 auto; padding: 36px 16px 90px; }
 
       /* “card container” like login/signup */
-      .u-shell{
-        background: var(--ul-card);
-        border: 2px solid rgba(17,24,39,.10);
-        border-radius: 26px;
-        box-shadow: 0 18px 55px rgba(17,24,39,.10);
-        padding: 22px;
-      }
+      /* remove the “global container”: keep only independent cards */
+      .u-shell{ background: transparent; border:0; border-radius:0; box-shadow:none; padding: 0; }
 
       .u-topbar{ display:flex; gap:14px; align-items:flex-start; justify-content:space-between; margin-bottom: 16px; flex-wrap:wrap; }
 
       /* Search bar (header filters) */
-      .u-searchbar{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--ul-border); border-radius:18px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.04); margin:12px 0 16px; }
-      .u-searchLeft{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+      .u-searchbar{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between; padding:14px; border:2px solid rgba(17,24,39,.08); border-radius:18px; background:#fff; box-shadow: var(--ul-shadow); margin:12px 0 16px; }
       .u-field{ display:flex; flex-direction:column; gap:6px; }
       .u-label{ font-size:12px; font-weight:900; color:var(--ul-text); }
-      .u-select,.u-input{ min-width:220px; border:1px solid var(--ul-border); border-radius:14px; padding:10px 12px; font-weight:900; font-size:13px; outline:none; background:#fff; }
-      .u-select{ min-width:160px; }
-      .u-input{ min-width:300px; }
+      .u-input{ min-width:340px; border:2px solid rgba(17,24,39,.14); border-radius:14px; padding:12px 12px; font-weight:900; font-size:13px; outline:none; background:#fff; }
       .u-hint{ font-size:12px; color:rgba(15,23,42,.65); }
       @media (max-width: 720px){ .u-input{ min-width:240px; } }
       .u-brand{ display:flex; flex-direction:column; gap:6px; }
-      .u-title{ font-size: 34px; font-weight: 800; letter-spacing: -0.03em; margin:0; color: var(--ul-text); }
-      .u-title .u-red{ color: var(--ul-red); }
+      .u-title{ font-size: 36px; font-weight: 900; letter-spacing: -0.03em; margin:0; color: var(--ul-red) !important; text-transform:none !important; }
+      #ulydia-metier-root h1.u-title{ color:#c00102 !important; text-transform:none !important; }
       .u-tagline{ font-size: 15px; color: var(--ul-muted); margin:0; line-height:1.55; max-width: 820px; }
       .u-sub{ font-size: 12px; color: var(--ul-muted); margin:0; }
+      /* Gradient headers like login cards */
+      #ulydia-metier-root .u-card-h{ background: linear-gradient(135deg, rgba(192,1,2,.10), rgba(255,255,255,1)); }
+      #ulydia-metier-root .u-card{ border: 2px solid rgba(17,24,39,.08); }
+
+      /* Gradient section headers (like login/signup cards) */
+      #ulydia-metier-root .u-card-h{ background: linear-gradient(135deg, rgba(192,1,2,.10), rgba(255,255,255,.92)); }
+      #ulydia-metier-root .u-card-t{ color: #0f172a; }
+      #ulydia-metier-root .u-note{ background: rgba(255,255,255,.75); }
+
 
       .u-actions{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 
@@ -155,7 +175,10 @@
         box-shadow: var(--ul-shadow);
         overflow:hidden;
       }
-      .u-card-h{ padding: 16px 18px; border-bottom: 1px solid rgba(17,24,39,.10); display:flex; gap:10px; align-items:center; justify-content:space-between; }
+      /* gradient header like your examples */
+      .u-card-h{ padding: 16px 18px; border-bottom: 1px solid rgba(17,24,39,.10); display:flex; gap:10px; align-items:center; justify-content:space-between;
+        background: linear-gradient(135deg, rgba(192,1,2,.14), rgba(255,255,255,1) 62%);
+      }
       .u-card-t{ font-size: 13px; font-weight: 800; margin:0; letter-spacing:.02em; text-transform:uppercase; color: #374151; }
       .u-card-b{ padding: 16px 18px; }
 
@@ -251,6 +274,22 @@
       if (isFilled(v)) return v;
     }
     return "";
+  }
+
+  // Unwrap common API record shapes: {fields}, {record:{fields}}, {data:{fields}}, etc.
+  function unwrapRecord(x){
+    let cur = x;
+    for (let i=0; i<5; i++) {
+      if (!cur || typeof cur !== "object") break;
+      if (cur.fields && typeof cur.fields === "object") return cur;
+      if (cur.record) { cur = cur.record; continue; }
+      if (cur.data) { cur = cur.data; continue; }
+      if (cur.metier) { cur = cur.metier; continue; }
+      if (cur.pays) { cur = cur.pays; continue; }
+      if (cur.item) { cur = cur.item; continue; }
+      break;
+    }
+    return cur || {};
   }
 
   // Robust field picker: matches direct keys AND normalized keys (case/accents/spaces/_)
@@ -374,7 +413,7 @@
         el("div", { class:"u-card u-err" }, [
           el("div", { class:"u-card-h" }, [
             el("p", { class:"u-card-t", html:"Could not render this job page" }),
-            el("span", { class:"u-note", html:"metier-page.js" })
+            el("span", { class:"u-note", html:"metier-page v3.5" })
           ]),
           el("div", { class:"u-card-b u-stack" }, [
             el("div", { class:"u-rich", html: String(msg || "Unknown error") }),
@@ -511,10 +550,9 @@
 
     const bar = el("div", { class:"u-searchbar" }, []);
 
-    const countrySelect = el("select", { class:"u-select", "aria-label":"Country" });
-    const catSelect = el("select", { class:"u-select", "aria-label":"Category" });
-    catSelect.appendChild(el("option", { value:"" }, [document.createTextNode("All categories")]))
-    catSelect.disabled = true; // enabled once you expose a categories endpoint
+    // Your job pages exist for all countries; country affects language + sponsor + optional bloc.
+    // So we keep ISO displayed (non-editable) and only provide a job autocomplete.
+    const isoPill = el("div", { class:"u-btn", style:"cursor:default;" }, [document.createTextNode(`Country: ${String(iso||"").toUpperCase()}`)]);
 
     const input = el("input", { class:"u-input", placeholder:"Search a job…", value: currentTitle || "" });
     const dl = el("datalist", { id:"u_metier_datalist" });
@@ -522,28 +560,15 @@
 
     const go = el("button", { class:"u-btn u-btn-primary", type:"button" }, [document.createTextNode("Search")]);
 
-    bar.appendChild(countrySelect);
-    bar.appendChild(catSelect);
+    bar.appendChild(isoPill);
     bar.appendChild(input);
     bar.appendChild(dl);
     bar.appendChild(go);
 
     parent.appendChild(bar);
 
-    // hydrate countries
-    getCountries().then(list => {
-      countrySelect.innerHTML = "";
-      list.forEach(c => {
-        const opt = document.createElement("option");
-        opt.value = c.iso;
-        opt.textContent = c.name ? `${c.name} (${c.iso})` : c.iso;
-        if (c.iso === String(iso||"").toUpperCase()) opt.selected = true;
-        countrySelect.appendChild(opt);
-      });
-    });
-
     async function hydrateMetiers(){
-      const selIso = String(countrySelect.value || iso || "").toUpperCase();
+      const selIso = String(iso || "").toUpperCase();
       const list = await getMetiersForIso(selIso);
       dl.innerHTML = "";
       list.slice(0, 200).forEach(m => {
@@ -555,13 +580,12 @@
       // if current page title not in list, still allow free typing
     }
 
-    countrySelect.addEventListener("change", hydrateMetiers);
     hydrateMetiers();
 
     function resolveSlugForInput(){
       const txt = String(input.value || "").trim();
       if (!txt) return "";
-      const selIso = String(countrySelect.value || iso || "").toUpperCase();
+      const selIso = String(iso || "").toUpperCase();
       const list = SEARCH_CACHE.metiersByIso[selIso] || [];
       const hit = list.find(m => m.title.toLowerCase() === txt.toLowerCase()) || list.find(m => m.slug.toLowerCase() === txt.toLowerCase());
       if (hit) return hit.slug;
@@ -571,7 +595,7 @@
     }
 
     function navigate(){
-      const selIso = String(countrySelect.value || iso || "").toUpperCase();
+      const selIso = String(iso || "").toUpperCase();
       const slug = resolveSlugForInput() || currentSlug || "";
       if (!slug) return;
       const u = new URL(location.origin + "/metier");
@@ -640,9 +664,9 @@
   // Render
   // -----------------------------
   function renderPage(data){
-    const metier  = data.metier || {};
-    const pays    = data.pays || {};
-    const sponsor = data.sponsor || {};
+    const metier  = unwrapRecord(data.metier || {});
+    const pays    = unwrapRecord(data.pays || {});
+    const sponsor = unwrapRecord(data.sponsor || {});
 
     const sponsorActive =
       sponsor.active === true ||
@@ -654,8 +678,9 @@
     // Prefer human label from CMS, never fall back to slug unless CMS is empty
     const slug = detectSlug();
     // Use CMS label first; if missing, prettify slug (never show raw slug)
-    const title   = String(pickF(metier, "Nom", "nom", "name", "title", "titre") || "").trim() || (metierSlugToTitle(slug) || slug || "Metier");
-    const accroche = toHtml(pickF(metier, "accroche", "tagline", "summary"));
+    const titleRaw = String(pickF(metier, "Nom", "nom", "name", "title", "titre") || "").trim();
+    const title    = humanizeTitle(titleRaw, slug);
+    const accroche = String(pickF(metier, "accroche", "tagline", "summary") || "").trim();
 
     // Rich text fields may come as HTML string OR object; normalize via toHtml()
     const htmlDescription = toHtml(pickF(metier, "description"));
@@ -682,7 +707,8 @@
     sqUrl   = withCacheBust(sqUrl);
 
     // --- Metier_Pays_Bloc (optional)
-    const bloc = Array.isArray(data.blocs_pays) && data.blocs_pays.length ? data.blocs_pays[0] : null;
+    const bloc0 = Array.isArray(data.blocs_pays) && data.blocs_pays.length ? data.blocs_pays[0] : null;
+    const bloc = bloc0 ? unwrapRecord(bloc0) : null;
     const blocExists = !!bloc;
 
     // Sidebar KPIs (from bloc)
@@ -708,8 +734,8 @@
 
     const top = el("div", { class:"u-topbar" }, [
       el("div", { class:"u-brand" }, [
-        el("h1", { class:"u-title", html: `${title}` }),
-        accroche ? el("p", { class:"u-tagline", html: accroche }) : el("p", { class:"u-tagline", html: "" }),
+        el("h1", { class:"u-title", html: esc(title) }),
+        accroche ? el("p", { class:"u-tagline", html: esc(accroche) }) : el("p", { class:"u-tagline", html: "" }),
         el("p", { class:"u-sub", html:
           `Country: <b>${String(data.iso || pays.code_iso || pays.iso || "").toUpperCase()}</b>` +
           ` • Language: <b>${String(data.lang || pays.langue_finale || bloc?.lang || "").toLowerCase()}</b>` +
@@ -741,6 +767,21 @@
     ];
     for (const [label, html] of secMap){
       if (isFilled(html)) leftStack.appendChild(sectionCard(label, html));
+    }
+
+    // If nothing rendered, show a friendly placeholder (helps spot mapping issues)
+    if (!leftStack.children.length) {
+      const details = DEBUG
+        ? `<div style="margin-top:10px; font-size:12px; color:rgba(15,23,42,.65)"><b>DEBUG</b> keys: ${esc(Object.keys((metier.fields && typeof metier.fields==='object') ? metier.fields : metier).slice(0,80).join(', '))}</div>`
+        : "";
+      leftStack.appendChild(
+        el("div", { class:"u-card" }, [
+          el("div", { class:"u-card-h" }, [ el("p", { class:"u-card-t", html:"Content" }) ]),
+          el("div", { class:"u-card-b" }, [
+            el("div", { class:"u-rich", html: `No job sections found in the CMS for this page yet.${details}` })
+          ])
+        ])
+      );
     }
 
     // Country specifics (only if bloc exists)
@@ -895,7 +936,7 @@
     if (!slug) throw new Error("Missing slug. Use /metier?metier=SLUG&country=FR (preview: add &preview=1)");
 
     const iso = await detectISO();
-    log("metier-page v3.0", { slug, iso, preview: PREVIEW });
+    log("metier-page v3.5", { slug, iso, preview: PREVIEW });
 
     const data = await fetchMetierPage({ slug, iso });
     renderPage(data);
