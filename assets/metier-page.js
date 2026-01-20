@@ -1,6 +1,6 @@
-/* metier-page.js — Ulydia (V5.1)
+/* metier-page.js — Ulydia (V5.1.1)
    ------------------------------------------------------------
-   Goals (V5.1)
+   Goals (V5.1.1)
    ✅ Uses Ulydia UI Kit + design tokens v2 (ulydia-ui.v2.js)
    ✅ Search bar ABOVE the job title on the Metier page
    ✅ Country (Pays) selector sourced from Webflow CMS (supports multiple ingestion methods)
@@ -70,11 +70,82 @@
        <script>window.__METIER_PAGE_DEBUG__ = true;</script>
 */
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V51__) return;
-  window.__ULYDIA_METIER_PAGE_V51__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V511__) return;
+  window.__ULYDIA_METIER_PAGE_V511__ = true;
+  // Always surface file/line for easier debugging
+  window.addEventListener("error", (e) => {
+    try {
+      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+    } catch(_) {}
+  });
+
+
+  // Always surface file/line for easier debugging
+  window.addEventListener("error", (e) => {
+    try {
+      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+    } catch(_) {}
+  });
+
+
+  // Always surface file/line for easier debugging
+  window.addEventListener("error", (e) => {
+    try {
+      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+    } catch(_) {}
+  });
+
+
+  // Always surface file/line for easier debugging
+  window.addEventListener("error", (e) => {
+    try {
+      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+    } catch(_) {}
+  });
+
+
+  // Always surface file/line for easier debugging
+  window.addEventListener("error", (e) => {
+    try {
+      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+    } catch(_) {}
+  });
+
+
+  // Always surface file/line for easier debugging
+  window.addEventListener("error", (e) => {
+    try {
+      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+    } catch(_) {}
+  });
+
+
+  // Always surface file/line for easier debugging
+  window.addEventListener("error", (e) => {
+    try {
+      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+    } catch(_) {}
+  });
+
+
+  // Always surface file/line for easier debugging
+  window.addEventListener("error", (e) => {
+    try {
+      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+    } catch(_) {}
+  });
+
+
+  // Always surface file/line for easier debugging
+  window.addEventListener("error", (e) => {
+    try {
+      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+    } catch(_) {}
+  });
+
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
-  const log = (...a) => { if (DEBUG) console.log("[metier-page.v5.1]", ...a); };
+  const log = (...a) => { if (DEBUG) console.log("[metier-page.v5.1.1]", ...a); };
 
   // =========================================================
   // CONFIG (EDIT IF NEEDED)
@@ -347,6 +418,18 @@
   // DATA LOADING (CMS)
   // =========================================================
   function loadCMS() {
+    // 0) Prefer globals if Webflow injected arrays via inline <script> push()
+    const gCountries = Array.isArray(window.__ULYDIA_COUNTRIES__) ? window.__ULYDIA_COUNTRIES__ : Array.isArray(window.__ULYDIA_PAYS__) ? window.__ULYDIA_PAYS__ : null;
+    const gSectors   = Array.isArray(window.__ULYDIA_SECTEURS__) ? window.__ULYDIA_SECTEURS__ : Array.isArray(window.__ULYDIA_SECTORS__) ? window.__ULYDIA_SECTORS__ : null;
+    const gMetiers   = Array.isArray(window.__ULYDIA_METIERS__) ? window.__ULYDIA_METIERS__ : Array.isArray(window.__ULYDIA_METIERS__) ? window.__ULYDIA_METIERS__ : null;
+    if (gCountries?.length || gSectors?.length || gMetiers?.length) {
+      return {
+        countries: normalizeCountries(gCountries || []),
+        sectors: normalizeSectors(gSectors || []),
+        metiers: normalizeMetiers(gMetiers || [])
+      };
+    }
+
     // JSON scripts first
     const countriesRaw = [
       ...parseJSONScriptByIdPrefix("countriesData"),
@@ -781,5 +864,5 @@
     renderShell({ isoDefault: iso, cms });
   }
 
-  main().catch((e) => console.error("[metier-page.v5.1] fatal", e));
+  main().catch((e) => console.error("[metier-page.v5.1.1] fatal", e));
 })();
