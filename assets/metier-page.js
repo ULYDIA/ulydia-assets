@@ -1,6 +1,6 @@
-/* metier-page.js — Ulydia (V5.1.2)
+/* metier-page.js — Ulydia (V5.1.3)
    ------------------------------------------------------------
-   Goals (V5.1.2)
+   Goals (V5.1.3)
    ✅ Uses Ulydia UI Kit + design tokens v2 (ulydia-ui.v2.js)
    ✅ Search bar ABOVE the job title on the Metier page
    ✅ Country (Pays) selector sourced from Webflow CMS (supports multiple ingestion methods)
@@ -75,7 +75,7 @@
   // Always surface file/line for easier debugging
   window.addEventListener("error", (e) => {
     try {
-      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+      console.log("[metier-page.v5.1.3][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
     } catch(_) {}
   });
 
@@ -83,7 +83,7 @@
   // Always surface file/line for easier debugging
   window.addEventListener("error", (e) => {
     try {
-      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+      console.log("[metier-page.v5.1.3][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
     } catch(_) {}
   });
 
@@ -91,7 +91,7 @@
   // Always surface file/line for easier debugging
   window.addEventListener("error", (e) => {
     try {
-      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+      console.log("[metier-page.v5.1.3][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
     } catch(_) {}
   });
 
@@ -99,7 +99,7 @@
   // Always surface file/line for easier debugging
   window.addEventListener("error", (e) => {
     try {
-      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+      console.log("[metier-page.v5.1.3][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
     } catch(_) {}
   });
 
@@ -107,7 +107,7 @@
   // Always surface file/line for easier debugging
   window.addEventListener("error", (e) => {
     try {
-      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+      console.log("[metier-page.v5.1.3][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
     } catch(_) {}
   });
 
@@ -115,7 +115,7 @@
   // Always surface file/line for easier debugging
   window.addEventListener("error", (e) => {
     try {
-      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+      console.log("[metier-page.v5.1.3][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
     } catch(_) {}
   });
 
@@ -123,7 +123,7 @@
   // Always surface file/line for easier debugging
   window.addEventListener("error", (e) => {
     try {
-      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+      console.log("[metier-page.v5.1.3][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
     } catch(_) {}
   });
 
@@ -131,7 +131,7 @@
   // Always surface file/line for easier debugging
   window.addEventListener("error", (e) => {
     try {
-      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+      console.log("[metier-page.v5.1.3][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
     } catch(_) {}
   });
 
@@ -139,13 +139,13 @@
   // Always surface file/line for easier debugging
   window.addEventListener("error", (e) => {
     try {
-      console.log("[metier-page.v5.1.1][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
+      console.log("[metier-page.v5.1.3][window.error]", e.message, "file:", e.filename, "line:", e.lineno, "col:", e.colno);
     } catch(_) {}
   });
 
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
-  const log = (...a) => { if (DEBUG) console.log("[metier-page.v5.1.1]", ...a); };
+  const log = (...a) => { if (DEBUG) console.log("[metier-page.v5.1.3]", ...a); };
 
   // =========================================================
   // CONFIG (EDIT IF NEEDED)
@@ -366,9 +366,9 @@
   }
 
   async function detectISO() {
-    // 1) query param iso
+    // 1) query param country (preferred) or iso (legacy)
     const url = new URL(location.href);
-    const qp = (url.searchParams.get("iso") || "").trim();
+    const qp = (url.searchParams.get("country") || url.searchParams.get("iso") || "").trim();
     if (qp) return qp.toUpperCase();
 
     // 2) cached
@@ -398,7 +398,7 @@
     // - query param ?slug=...
     // - last path segment on /fiche-metiers/xxx or /metier/xxx
     const url = new URL(location.href);
-    const qp = (url.searchParams.get("slug") || "").trim();
+    const qp = (url.searchParams.get("metier") || url.searchParams.get("slug") || "").trim();
     if (qp) return qp;
 
     const p = url.pathname.replace(/\/+$/, "");
@@ -412,8 +412,9 @@
 
   function openMetier({ slug, iso }) {
     const u = new URL(location.origin + METIER_SHELL_PATH);
-    u.searchParams.set("slug", slug);
-    u.searchParams.set("iso", iso);
+    // New routing: /metier?metier=SLUG&country=XX
+    u.searchParams.set("metier", slug);
+    u.searchParams.set("country", String(iso || "").toUpperCase());
     location.href = u.toString();
   }
 
@@ -867,5 +868,5 @@
     renderShell({ isoDefault: iso, cms });
   }
 
-  main().catch((e) => console.error("[metier-page.v5.1.1] fatal", e));
+  main().catch((e) => console.error("[metier-page.v5.1.3] fatal", e));
 })();
