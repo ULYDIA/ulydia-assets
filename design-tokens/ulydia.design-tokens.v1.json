@@ -1,0 +1,96 @@
+{
+  "name": "Ulydia Core UI",
+  "version": "1.0.0",
+  "meta": {
+    "notes": "Extracted from design01.html",
+    "source": "design01.html"
+  },
+
+  "font": {
+    "family": "Montserrat",
+    "fallback": "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif",
+    "baseSizePx": 14,
+    "weights": [300, 400, 500, 600, 700, 800]
+  },
+
+  "colors": {
+    "primary": "#c00102",
+    "primaryHover": "#a00001",
+    "text": "#1a1a1a",
+    "muted": "#6b7280",
+    "border": "#e5e7eb",
+    "bg": "#ffffff",
+    "card": "#fafafa"
+  },
+
+  "radius": {
+    "sm": "6px",
+    "md": "8px",
+    "lg": "10px",
+    "xl": "12px"
+  },
+
+  "shadow": {
+    "card": "0 10px 30px rgba(0,0,0,.06)",
+    "cardHover": "0 15px 40px rgba(0,0,0,.10)"
+  },
+
+  "layout": {
+    "maxWidth": "1100px",
+    "pagePadding": "24px",
+    "gridGap": "24px",
+    "sectionSpacing": "40px"
+  },
+
+  "components": {
+    "card": {
+      "className": "u-card",
+      "background": "{colors.card}",
+      "border": "1px solid {colors.border}",
+      "radius": "{radius.lg}",
+      "shadow": "{shadow.card}",
+      "padding": "24px",
+      "hover": {
+        "shadow": "{shadow.cardHover}",
+        "translateY": "-2px"
+      }
+    },
+
+    "button": {
+      "height": "44px",
+      "radius": "{radius.md}",
+      "weight": 600,
+      "paddingX": "24px",
+      "gap": "8px",
+      "primary": {
+        "className": "u-btn u-btn--primary",
+        "bg": "{colors.primary}",
+        "fg": "#ffffff",
+        "hoverBg": "{colors.primaryHover}",
+        "disabledOpacity": 0.5
+      },
+      "secondary": {
+        "className": "u-btn u-btn--secondary",
+        "bg": "#ffffff",
+        "fg": "{colors.text}",
+        "border": "1px solid {colors.border}",
+        "hoverBg": "{colors.card}",
+        "hoverBorder": "{colors.muted}",
+        "disabledOpacity": 0.5
+      }
+    },
+
+    "banner": {
+      "wide": { "className": "u-banner u-banner--wide", "aspectRatio": "3 / 1", "radius": "{radius.lg}" },
+      "square": { "className": "u-banner u-banner--square", "aspectRatio": "1 / 1", "radius": "{radius.lg}" }
+    }
+  },
+
+  "rules": {
+    "noWebflowDefaultStyles": true,
+    "avoidInlineStylesExceptDynamicData": true,
+    "useTokensOnly": true,
+    "singleCardStyle": true,
+    "singlePrimaryButtonStyle": true
+  }
+}
