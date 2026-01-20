@@ -1,4 +1,4 @@
-/* metier-page.js — Ulydia (V3.2)
+/* metier-page.js — Ulydia (V3.3)
    - Page /metier (shell) + support /fiche-metiers/<slug>
    - Rendu full-code (WHITE theme like login/signup)
    - ✅ Keeps existing sponsor banner logic (wide + square, click -> sponsor link)
@@ -26,6 +26,8 @@
   const WORKER_URL   = window.ULYDIA_WORKER_URL || "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = window.ULYDIA_PROXY_SECRET || "";
   const IPINFO_TOKEN = window.ULYDIA_IPINFO_TOKEN || "";
+  // Optional: countries list used by the top search bar (falls back gracefully if unreachable)
+  const COUNTRIES_JSON_URL = window.ULYDIA_COUNTRIES_JSON_URL || "https://ulydia-assets.pages.dev/countries-map.json";
 
   const qp = (k) => new URLSearchParams(location.search).get(k);
 
@@ -57,6 +59,24 @@
     } catch {
       return s + (s.includes("?") ? "&" : "?") + "ulprev=" + Date.now();
     }
+  }
+
+  // Slug -> pretty title (same logic as sponsorship page)
+  function metierSlugToTitle(slug) {
+    const s = String(slug || "").trim();
+    if (!s) return "";
+    const lowerWords = new Set(["de","du","des","la","le","les","d","et","à","au","aux","en","pour","sur"]);
+    return s
+      .replace(/[-_]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .split(" ")
+      .map((w, i) => {
+        const lw = w.toLowerCase();
+        if (i > 0 && lowerWords.has(lw)) return lw;
+        return lw.charAt(0).toUpperCase() + lw.slice(1);
+      })
+      .join(" ");
   }
 
   // -----------------------------
@@ -106,6 +126,17 @@
       }
 
       .u-topbar{ display:flex; gap:14px; align-items:flex-start; justify-content:space-between; margin-bottom: 16px; flex-wrap:wrap; }
+
+      /* Search bar (header filters) */
+      .u-searchbar{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--ul-border); border-radius:18px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.04); margin:12px 0 16px; }
+      .u-searchLeft{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+      .u-field{ display:flex; flex-direction:column; gap:6px; }
+      .u-label{ font-size:12px; font-weight:900; color:var(--ul-text); }
+      .u-select,.u-input{ min-width:220px; border:1px solid var(--ul-border); border-radius:14px; padding:10px 12px; font-weight:900; font-size:13px; outline:none; background:#fff; }
+      .u-select{ min-width:160px; }
+      .u-input{ min-width:300px; }
+      .u-hint{ font-size:12px; color:rgba(15,23,42,.65); }
+      @media (max-width: 720px){ .u-input{ min-width:240px; } }
       .u-brand{ display:flex; flex-direction:column; gap:6px; }
       .u-title{ font-size: 34px; font-weight: 800; letter-spacing: -0.03em; margin:0; color: var(--ul-text); }
       .u-title .u-red{ color: var(--ul-red); }
@@ -222,6 +253,35 @@
     return "";
   }
 
+  // Robust field picker: matches direct keys AND normalized keys (case/accents/spaces/_)
+  function normKey(k){
+    return String(k || "")
+      .trim()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, "_")
+      .replace(/[^a-zA-Z0-9_]/g, "")
+      .toLowerCase();
+  }
+
+  function pickF(obj, ...keys){
+    const base = (obj && obj.fields && typeof obj.fields === "object") ? obj.fields : (obj || {});
+    // direct
+    for (const k of keys){
+      if (!k) continue;
+      const v = base[k];
+      if (isFilled(v)) return v;
+    }
+    // normalized lookup
+    const wanted = new Set(keys.filter(Boolean).map(normKey));
+    if (!wanted.size) return "";
+    for (const [k, v] of Object.entries(base)){
+      if (!isFilled(v)) continue;
+      if (wanted.has(normKey(k))) return v;
+    }
+    return "";
+  }
+
   // Coerce rich-text-ish values to HTML string
   function toHtml(v){
     if (v == null) return "";
@@ -232,6 +292,8 @@
       if (typeof v.html === "string") return v.html;
       if (typeof v.value === "string") return v.value;
       if (typeof v.text === "string") return v.text;
+      // Airtable rich text sometimes: { children: [...] }
+      if (Array.isArray(v.children)) return v.children.map(toHtml).join("\n");
     }
     return String(v);
   }
@@ -381,6 +443,148 @@
   }
 
   // -----------------------------
+  // Top search bar (country / category / metier autocomplete)
+  // - best-effort: does not break page if data sources are unavailable
+  // -----------------------------
+  const SEARCH_CACHE = window.__ULYDIA_METIER_SEARCH_CACHE__ || (window.__ULYDIA_METIER_SEARCH_CACHE__ = {
+    countries: null,
+    metiersByIso: Object.create(null),
+  });
+
+  async function getCountries(){
+    if (SEARCH_CACHE.countries) return SEARCH_CACHE.countries;
+    try{
+      const r = await fetch(COUNTRIES_JSON_URL, { cache: "force-cache" });
+      const j = await r.json().catch(()=>null);
+      const arr = Array.isArray(j) ? j : (Array.isArray(j?.items) ? j.items : (Array.isArray(j?.countries) ? j.countries : []));
+      const out = arr
+        .map(x => ({
+          iso: String(x.code_iso || x.iso || x.country_code || x.country || "").toUpperCase(),
+          name: String(x.Nom || x.name || x.country_name || x.label || x.iso || "").trim(),
+        }))
+        .filter(x => x.iso);
+      SEARCH_CACHE.countries = out.length ? out : [{ iso:"FR", name:"France" }];
+      return SEARCH_CACHE.countries;
+    }catch(e){
+      SEARCH_CACHE.countries = [{ iso:"FR", name:"France" }];
+      return SEARCH_CACHE.countries;
+    }
+  }
+
+  async function getMetiersForIso(iso){
+    const key = String(iso || "").toUpperCase();
+    if (SEARCH_CACHE.metiersByIso[key]) return SEARCH_CACHE.metiersByIso[key];
+
+    const base = WORKER_URL.replace(/\/$/, "");
+    const tries = [
+      `${base}/v1/metiers?iso=${encodeURIComponent(key)}`,
+      `${base}/v1/metier-list?iso=${encodeURIComponent(key)}`,
+      `${base}/v1/jobs?iso=${encodeURIComponent(key)}`,
+      `${base}/v1/metiers`,
+    ];
+
+    for (const url of tries){
+      try{
+        const r = await fetch(url, { cache: "no-store" });
+        const j = await r.json().catch(()=>null);
+        if (!r.ok || !j) continue;
+        const arr = Array.isArray(j) ? j : (j.metiers || j.jobs || j.items || j.data || []);
+        if (!Array.isArray(arr) || !arr.length) continue;
+        const out = arr.map(x => {
+          const fields = (x && x.fields && typeof x.fields === "object") ? x.fields : (x || {});
+          const slug = String(fields.slug || fields.metier_slug || fields.job_slug || fields.metier || fields.slug_metier || "").trim();
+          const title = String(fields.Nom || fields.nom || fields.title || fields.name || "").trim() || metierSlugToTitle(slug);
+          return { slug, title };
+        }).filter(x => x.slug && x.title);
+        if (out.length) {
+          SEARCH_CACHE.metiersByIso[key] = out;
+          return out;
+        }
+      }catch{ /* try next */ }
+    }
+    SEARCH_CACHE.metiersByIso[key] = [];
+    return [];
+  }
+
+  function mountSearchBar({ parent, iso, currentSlug, currentTitle }){
+    if (!parent) return;
+
+    const bar = el("div", { class:"u-searchbar" }, []);
+
+    const countrySelect = el("select", { class:"u-select", "aria-label":"Country" });
+    const catSelect = el("select", { class:"u-select", "aria-label":"Category" });
+    catSelect.appendChild(el("option", { value:"" }, [document.createTextNode("All categories")]))
+    catSelect.disabled = true; // enabled once you expose a categories endpoint
+
+    const input = el("input", { class:"u-input", placeholder:"Search a job…", value: currentTitle || "" });
+    const dl = el("datalist", { id:"u_metier_datalist" });
+    input.setAttribute("list", "u_metier_datalist");
+
+    const go = el("button", { class:"u-btn u-btn-primary", type:"button" }, [document.createTextNode("Search")]);
+
+    bar.appendChild(countrySelect);
+    bar.appendChild(catSelect);
+    bar.appendChild(input);
+    bar.appendChild(dl);
+    bar.appendChild(go);
+
+    parent.appendChild(bar);
+
+    // hydrate countries
+    getCountries().then(list => {
+      countrySelect.innerHTML = "";
+      list.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c.iso;
+        opt.textContent = c.name ? `${c.name} (${c.iso})` : c.iso;
+        if (c.iso === String(iso||"").toUpperCase()) opt.selected = true;
+        countrySelect.appendChild(opt);
+      });
+    });
+
+    async function hydrateMetiers(){
+      const selIso = String(countrySelect.value || iso || "").toUpperCase();
+      const list = await getMetiersForIso(selIso);
+      dl.innerHTML = "";
+      list.slice(0, 200).forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m.title;
+        opt.setAttribute("data-slug", m.slug);
+        dl.appendChild(opt);
+      });
+      // if current page title not in list, still allow free typing
+    }
+
+    countrySelect.addEventListener("change", hydrateMetiers);
+    hydrateMetiers();
+
+    function resolveSlugForInput(){
+      const txt = String(input.value || "").trim();
+      if (!txt) return "";
+      const selIso = String(countrySelect.value || iso || "").toUpperCase();
+      const list = SEARCH_CACHE.metiersByIso[selIso] || [];
+      const hit = list.find(m => m.title.toLowerCase() === txt.toLowerCase()) || list.find(m => m.slug.toLowerCase() === txt.toLowerCase());
+      if (hit) return hit.slug;
+      // if user typed slug-like
+      if (/^[a-z0-9-]{2,}$/i.test(txt)) return txt;
+      return "";
+    }
+
+    function navigate(){
+      const selIso = String(countrySelect.value || iso || "").toUpperCase();
+      const slug = resolveSlugForInput() || currentSlug || "";
+      if (!slug) return;
+      const u = new URL(location.origin + "/metier");
+      u.searchParams.set("metier", slug);
+      u.searchParams.set("country", selIso);
+      location.href = u.toString();
+    }
+
+    go.addEventListener("click", navigate);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); navigate(); } });
+  }
+
+  // -----------------------------
   // Rendering helpers for Metier_Pays_Bloc
   // -----------------------------
   function formatMoneyRange(min, max, currency){
@@ -426,7 +630,7 @@
 
     const out = [];
     for (const [label, key] of fields){
-      const html = toHtml(pick(paysBloc, key, key.toLowerCase()));
+      const html = toHtml(pickF(paysBloc, key, key.toLowerCase()));
       if (isFilled(html)) out.push({ label, html });
     }
     return out;
@@ -448,16 +652,18 @@
 
     // --- Metier fields (your real names)
     // Prefer human label from CMS, never fall back to slug unless CMS is empty
-    const title   = pick(metier, "Nom", "nom", "name", "title", "titre") || (detectSlug() || "Metier");
-    const accroche = pick(metier, "accroche", "tagline", "summary");
+    const slug = detectSlug();
+    // Use CMS label first; if missing, prettify slug (never show raw slug)
+    const title   = String(pickF(metier, "Nom", "nom", "name", "title", "titre") || "").trim() || (metierSlugToTitle(slug) || slug || "Metier");
+    const accroche = toHtml(pickF(metier, "accroche", "tagline", "summary"));
 
     // Rich text fields may come as HTML string OR object; normalize via toHtml()
-    const htmlDescription = toHtml(pick(metier, "description"));
-    const htmlMissions    = toHtml(pick(metier, "missions"));
-    const htmlCompetences = toHtml(pick(metier, "Compétences", "Competences", "competences"));
-    const htmlEnv         = toHtml(pick(metier, "environnements"));
-    const htmlProfil      = toHtml(pick(metier, "profil_recherche"));
-    const htmlEvol        = toHtml(pick(metier, "evolutions_possibles"));
+    const htmlDescription = toHtml(pickF(metier, "description"));
+    const htmlMissions    = toHtml(pickF(metier, "missions"));
+    const htmlCompetences = toHtml(pickF(metier, "Compétences", "Competences", "competences"));
+    const htmlEnv         = toHtml(pickF(metier, "environnements"));
+    const htmlProfil      = toHtml(pickF(metier, "profil_recherche"));
+    const htmlEvol        = toHtml(pickF(metier, "evolutions_possibles"));
 
     // --- Banner logic (KEEP AS-IS)
     let wideUrl = sponsorActive ? (sponsor.logo_wide || sponsor.logo_2 || sponsor.sponsor_logo_2) : (pays?.banners?.wide || "");
@@ -480,14 +686,14 @@
     const blocExists = !!bloc;
 
     // Sidebar KPIs (from bloc)
-    const currency = pick(bloc || {}, "Currency", "currency") || "";
+    const currency = pickF(bloc || {}, "Currency", "currency") || "";
     const salaryJunior = formatMoneyRange(bloc?.salary_junior_min, bloc?.salary_junior_max, currency);
     const salaryMid    = formatMoneyRange(bloc?.salary_mid_min,    bloc?.salary_mid_max,    currency);
     const salarySenior = formatMoneyRange(bloc?.salary_senior_min, bloc?.salary_senior_max, currency);
     const variableShare = (typeof bloc?.salary_variable_share === "number") ? `${bloc.salary_variable_share}%` : "";
 
-    const remoteLevel   = pick(bloc || {}, "Remote_level", "remote_level");
-    const automationRisk = pick(bloc || {}, "Automation_risk", "automation_risk");
+    const remoteLevel   = pickF(bloc || {}, "Remote_level", "remote_level");
+    const automationRisk = pickF(bloc || {}, "Automation_risk", "automation_risk");
 
     // Build country-block rich cards
     const paysCards = blocExists ? renderPaysBlocCards(bloc) : [];
@@ -513,7 +719,7 @@
       el("div", { class:"u-actions" }, [
         el("a", { class:"u-btn", href:"/", html:"Home" }),
         el("a", { class:"u-btn", href:"/my-account", html:"My account" }),
-        el("a", { class:"u-btn u-btn-primary", href:"/sponsorship", html:"Sponsor this job" })
+        ...(!sponsorActive ? [el("a", { class:"u-btn u-btn-primary", href:"/sponsorship", html:"Sponsor this job" })] : [])
       ])
     ]);
 
@@ -638,6 +844,11 @@
     const grid = el("div", { class:"u-grid" }, [ leftStack, rightStack ]);
 
     shell.appendChild(top);
+    // Header search bar (country + job autocomplete). Safe if data endpoints unavailable.
+    try{
+      const pageIso = String(data.iso || pays.code_iso || pays.iso || "").toUpperCase();
+      mountSearchBar({ parent: shell, iso: pageIso, currentSlug: slug, currentTitle: title });
+    }catch(e){ log("searchbar failed", e); }
     if (wide) shell.appendChild(wide);
     shell.appendChild(grid);
 
