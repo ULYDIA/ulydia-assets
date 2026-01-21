@@ -1,11 +1,28 @@
 {
-  "iso": "ZW",
-  "label": "Zimbabwe",
-  "langue_finale": "en",
-  "banners": {
-    "image_1": "https://.../banniere_sponsorisation_image_1.png",
-    "image_2": "https://.../banniere_sponsorisation_image_2.png",
-    "texte": "…",
-    "cta": "…"
-  }
+  "countries": [
+    {
+      "iso": "ZW",
+      "label": "Zimbabwe",
+      "langue_finale": "en",
+      "banners": {
+        "image_1": "https://.../banniere_sponsorisation_image_1.png",
+        "image_2": "https://.../banniere_sponsorisation_image_2.png",
+        "texte": "",
+        "cta": ""
+      }
+    },
+    {
+      "iso": "FR",
+      "label": "France",
+      "langue_finale": "fr",
+      "banners": {
+        "image_1": "https://.../fr_image_1.png",
+        "image_2": "https://.../fr_image_2.png",
+        "texte": "",
+        "cta": ""
+      }
+    }
+  ],
+  "sectors": [],
+  "metiers": []
 }
