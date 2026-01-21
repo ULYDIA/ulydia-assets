@@ -577,17 +577,19 @@ function collectUrlsDeep(obj, out, depth){
 }
 
 function pickCountryBanners(countryMeta){
-  // countryMeta may be payload.pays, and banners may be nested or flat.
   const bannersObj = countryMeta?.banners || {};
+  const wide = pickStr(bannersObj?.image_1 || "");
+  const square = pickStr(bannersObj?.image_2 || "");
+  return {
+    mode: "fallback",
+    wide,
+    square,
+    click: "#",
+    texte: pickStr(bannersObj?.texte || ""),
+    cta: pickStr(bannersObj?.cta || "")
+  };
+}
 
-  // 1) Try “known” keys first (fast path)
-  const fastWide = pickStr(
-    bannersObj?.image_1 ||
-    bannersObj?.banniere_sponsorisation_image_1 ||
-    countryMeta?.banniere_sponsorisation_image_1 ||
-    countryMeta?.image_1 ||
-    ""
-  );
 
   const fastSquare = pickStr(
     bannersObj?.image_2 ||
@@ -649,9 +651,18 @@ function pickCountryBanners(countryMeta){
     ROOT.querySelector('[data-el="name"]').textContent = name || "—";
 
     // Country context: prefer Worker payload.pays (most accurate), else catalog
-    const countryMeta = payload?.pays || selectedCountryFromCatalog || {};
+    // Prefer catalog country (because it contains the non-sponsored banners for sure)
+// and use payload.pays only for langue_finale if needed.
+    const countryMeta = selectedCountryFromCatalog || payload?.pays || {};
+
     const iso = upper2(countryMeta?.iso || payload?.iso || "");
-    const lang = pickStr(countryMeta?.langue_finale || payload?.lang || "");
+    const lang = pickStr(
+      payload?.pays?.langue_finale ||
+      selectedCountryFromCatalog?.langue_finale ||
+      payload?.lang ||
+      ""
+    );
+
 
     // Sub meta
     const sub = ROOT.querySelector('[data-el="submeta"]');
