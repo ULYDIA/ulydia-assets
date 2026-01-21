@@ -1,12 +1,13 @@
-/* metier-page.js — Ulydia (V6.2)
+/* metier-page.js — Ulydia (V7.0)
    ✅ Layout aligned with propal1 (Tailwind CDN + same structure)
    ✅ Fixes corrupted sponsor property access (no "...").
    ✅ Robust country banner extraction (Webflow field-name variations)
-   ✅ Default country on load = visitor ISO (IPinfo) + reflects in filter
+   ✅ Auto-select country + metier from URL (?country=FR&metier=slug)
+   ✅ Fallback country = visitor ISO (IPinfo) if URL does not provide one
 */
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V62__) return;
-  window.__ULYDIA_METIER_PAGE_V62__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V70__) return;
+  window.__ULYDIA_METIER_PAGE_V70__ = true;
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => { if (DEBUG) console.log("[metier-page]", ...a); };
@@ -483,9 +484,15 @@
     // counts
     elCount.textContent = String(metiers.length || "—");
 
-    // Default country = visitor ISO (important user requirement)
+    // URL params (your page is only reachable after a selection)
+    const url = new URL(location.href);
+    const urlCountry = safeText(url.searchParams.get("country") || url.searchParams.get("iso") || "").trim().toUpperCase();
+    const urlMetier  = safeText(url.searchParams.get("metier") || url.searchParams.get("slug") || "").trim();
+
+    // Default country = URL country, else visitor ISO
     const visitorISO = await detectVisitorISO();
-    log("visitorISO", visitorISO);
+    const defaultISO = (urlCountry && /^[A-Z]{2}$/.test(urlCountry)) ? urlCountry : visitorISO;
+    log("urlCountry/urlMetier/visitorISO/defaultISO", urlCountry, urlMetier, visitorISO, defaultISO);
 
     // Fill selects
     const countryOptions = countries
@@ -500,9 +507,16 @@
       .map(s => ({ value: s.id, label: s.name }));
     fillSelect(elSector, sectorOptions, "Choisir un secteur…");
 
-    // Set default country if present
-    if (visitorISO && countryOptions.some(o => o.value === visitorISO)) {
-      elCountry.value = visitorISO;
+    // Ensure default ISO exists in the dropdown (some Webflow items may not expose ISO cleanly)
+    if (defaultISO && /^[A-Z]{2}$/.test(defaultISO) && !countryOptions.some(o => o.value === defaultISO)) {
+      const opt = document.createElement("option");
+      opt.value = defaultISO;
+      opt.textContent = `${defaultISO}`;
+      // insert after placeholder
+      elCountry.appendChild(opt);
+    }
+    if (defaultISO && /^[A-Z]{2}$/.test(defaultISO)) {
+      elCountry.value = defaultISO;
     }
 
     // Sponsor CTA always points to sponsor page
@@ -581,7 +595,7 @@
     elReset.addEventListener("click", () => {
       elSector.value = "";
       elJob.value = "";
-      if (visitorISO && countryOptions.some(o => o.value === visitorISO)) elCountry.value = visitorISO;
+      if (defaultISO) elCountry.value = defaultISO;
       else elCountry.value = "";
       elCount.textContent = String(metiers.length || "—");
       elTitle.textContent = "Choisis un métier";
@@ -594,6 +608,14 @@
 
     // init side info
     elCountry.dispatchEvent(new Event("change"));
+
+    // Auto-render the metier from URL (primary flow)
+    if (urlMetier) {
+      const base = metiers.find(m => m.slug === urlMetier) || null;
+      if (base) elJob.value = base.name;
+      else elJob.value = urlMetier;
+      await renderMetier(urlMetier);
+    }
   }
 
   async function renderMetier(slug){
@@ -654,6 +676,7 @@
 
     // Wide banner (priority sponsor, else country fallback)
     const wideUrl = hasSponsorCreative ? (sponsorWide || sponsorSquare) : (fallbackWide || fallbackSquare);
+    log("banner urls", { iso, hasSponsorCreative, sponsorWide, sponsorSquare, fallbackWide, fallbackSquare, wideUrl });
     if (wideUrl) {
       elWideImg.src = wideUrl;
       elWideA.href = clickUrl;
@@ -665,6 +688,7 @@
 
     // Square banner (priority sponsor, else country fallback)
     const sqUrl = hasSponsorCreative ? (sponsorSquare || sponsorWide) : (fallbackSquare || fallbackWide);
+    log("square banner url", { sqUrl });
     if (sqUrl) {
       elSqImg.src = sqUrl;
       elSqA.href = clickUrl;
