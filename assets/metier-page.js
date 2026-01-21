@@ -145,13 +145,43 @@
     return { wide, square };
   }
 
+  function guessISOFromObject(obj){
+    if (!obj || typeof obj !== "object") return "";
+    // 1) direct common keys
+    const direct = [
+      obj.iso, obj.code, obj.alpha2, obj.ISO, obj.iso2, obj["iso-2"], obj["iso_2"],
+      obj["country_code"], obj["countryCode"], obj["alpha_2"], obj["alpha2_code"],
+      obj["iso3166_1_alpha2"], obj["iso3166_1_alpha_2"], obj["iso_3166_1_alpha_2"],
+      obj["iso3166"], obj["iso_3166"]
+    ];
+    for (const v of direct) {
+      const s = safeText(v).trim();
+      if (/^[a-z]{2}$/i.test(s)) return s.toUpperCase();
+    }
+    // 2) scan keys that look like iso/code and value is 2 letters
+    for (const [k,v] of Object.entries(obj)) {
+      const lk = String(k).toLowerCase();
+      if (!/(^|_|\b)(iso|code|alpha2|alpha_2)(\b|_|$)/.test(lk)) continue;
+      const s = safeText(v).trim();
+      if (/^[a-z]{2}$/i.test(s)) return s.toUpperCase();
+    }
+    // 3) last resort: scan any string value that is exactly 2 letters (avoid false positives by preferring uppercase)
+    for (const v of Object.values(obj)) {
+      const s = safeText(v).trim();
+      if (/^[A-Z]{2}$/.test(s)) return s;
+    }
+    return "";
+  }
+
   function normCountry(c){
     if (!c || typeof c !== "object") return null;
-    const iso = safeText(c.iso || c.code || c.alpha2 || c.ISO || c.iso2 || "").trim().toUpperCase();
+    const iso = guessISOFromObject(c);
     const name = safeText(c.name || c.nom || c.pays || c.title || iso).trim();
     const lang = safeText(c.langue_finale || c.lang_finale || c.langue || c.lang || c.language || "").trim().toLowerCase();
     const b = guessCountryBanners(c);
-    return { iso, name, lang, banners: b, raw: c };
+    // keep only if we have an ISO (otherwise can't be used in filters)
+    if (!iso) return null;
+    return { iso, name: name || iso, lang, banners: b, raw: c };
   }
 
   function normSector(s){
