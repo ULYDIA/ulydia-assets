@@ -640,7 +640,7 @@ function pickCountryBanners(countryMeta){
     wrap.className = "ul-section";
     wrap.innerHTML = `<h2>${escapeHTML(title)}</h2><div class="ul-rich">${safe}</div>`;
     sectionsEl.appendChild(wrap);
-  }
+  };
 
   function renderContent(payload, selectedCountryFromCatalog){
     const card = ROOT.querySelector('[data-el="contentCard"]');
