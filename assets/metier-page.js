@@ -1,415 +1,632 @@
-/* metier-page.js — Ulydia (V5.2)
-   - Cascading search: Country → Sector → Job
-   - Default country from visitor (IPinfo) + country.langue_finale drives sector language (if available)
-   - Job list filtered by selected sector (+ search box)
-   - Detail view: /metier?metier=SLUG&country=XX
-     - Sponsor banner if sponsored, else fallback non-sponsored banners by country language
-   - Safe/idempotent
+/* metier-page.js — Ulydia (v9.7)
+   Fixes:
+   - Countries source of truth = /v1/filters (avoid 100 chunk issue)
+   - Robust ISO extraction (multi-keys)
+   - Deterministic country selection: URL (valid) > GEO > FR > first
+   - Fallback: read countriesData chunks if /v1/filters fails
+   - Debug helpers
+
+   Expected Worker endpoints:
+   - GET  /v1/filters        -> { countries: [...], sectors?: [...], metiers?: [...] }
+   - GET  /v1/geo            -> { iso: "FR", ... }   (optional)
+   - GET  /v1/metier-page?slug=...&iso=FR  -> { metier, pays, meta? } (your existing route)
 */
+
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V52__) return;
-  window.__ULYDIA_METIER_PAGE_V52__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V97__) return;
+  window.__ULYDIA_METIER_PAGE_V97__ = true;
 
+  // =========================================================
+  // CONFIG
+  // =========================================================
+  const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
+  const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL"; // keep your real one
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
-  const log = (...a) => { if (DEBUG) console.log("[metier-page.v5.2]", ...a); };
 
-  const WORKER_URL   = window.ULYDIA_WORKER_URL   || "https://ulydia-business.contact-871.workers.dev";
-  const PROXY_SECRET = window.ULYDIA_PROXY_SECRET || "";
-  const IPINFO_TOKEN = window.ULYDIA_IPINFO_TOKEN || "";
+  function log(...a){ if (DEBUG) console.log("[metier-page]", ...a); }
+  function warn(...a){ console.warn("[metier-page]", ...a); }
 
-  const qs = (sel, root=document) => root.querySelector(sel);
-  const qsa = (sel, root=document) => Array.from(root.querySelectorAll(sel));
-  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
-  const debounce = (fn, ms=150) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
-
-  function lastScriptById(id){
-    const all = qsa(`script#${CSS.escape(id)}`);
-    return all.length ? all[all.length - 1] : null;
-  }
-  function readJsonScript(id, fallback=[]){
-    const el = lastScriptById(id);
-    if (!el) return fallback;
-    try { return JSON.parse(el.textContent || "[]") || fallback; }
-    catch(e){ log("bad json in", id, e); return fallback; }
+  // =========================================================
+  // ROOT
+  // =========================================================
+  let ROOT = document.getElementById("ulydia-metier-root");
+  if (!ROOT) {
+    ROOT = document.createElement("div");
+    ROOT.id = "ulydia-metier-root";
+    document.body.prepend(ROOT);
+    log("root auto-created");
   }
 
-  function getURLParams(){
+  // =========================================================
+  // CSS (simple, tu peux remplacer par ton design dashboard)
+  // =========================================================
+  function injectCSS(){
+    if (document.getElementById("ulydia-metier-css")) return;
+    const css = `
+      :root{
+        --ul-bg:#0b0f19;
+        --ul-card:#121a2a;
+        --ul-card2:#0f1626;
+        --ul-text:#e7eefc;
+        --ul-muted:#a9b4c8;
+        --ul-line:rgba(255,255,255,.08);
+        --ul-accent:#c00102;
+        --ul-radius:16px;
+        --ul-shadow:0 10px 30px rgba(0,0,0,.35);
+        --ul-font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      }
+      #ulydia-metier-root{ font-family:var(--ul-font); color:var(--ul-text); }
+      .ul-wrap{ max-width:1100px; margin:0 auto; padding:24px 16px 64px; }
+      .ul-card{ background:linear-gradient(180deg, var(--ul-card), var(--ul-card2)); border:1px solid var(--ul-line); border-radius:var(--ul-radius); box-shadow:var(--ul-shadow); }
+      .ul-head{ padding:18px 18px 14px; border-bottom:1px solid var(--ul-line); display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+      .ul-title{ font-size:18px; font-weight:800; letter-spacing:.2px; }
+      .ul-sub{ color:var(--ul-muted); font-size:13px; margin-top:4px; }
+      .ul-body{ padding:18px; }
+      .ul-row{ display:flex; gap:12px; flex-wrap:wrap; }
+      .ul-field{ display:flex; flex-direction:column; gap:6px; min-width:220px; flex:1; }
+      .ul-label{ font-size:12px; color:var(--ul-muted); }
+      .ul-input,.ul-select{
+        height:40px; border-radius:12px; border:1px solid var(--ul-line);
+        background:rgba(255,255,255,.04); color:var(--ul-text);
+        padding:0 12px; outline:none;
+      }
+      .ul-input::placeholder{ color:rgba(233,238,252,.45); }
+      .ul-actions{ display:flex; gap:10px; align-items:center; }
+      .ul-btn{
+        height:40px; padding:0 14px; border-radius:12px;
+        border:1px solid var(--ul-line); background:rgba(255,255,255,.06);
+        color:var(--ul-text); cursor:pointer; font-weight:700;
+      }
+      .ul-btn.primary{ background:var(--ul-accent); border-color:transparent; }
+      .ul-btn:disabled{ opacity:.55; cursor:not-allowed; }
+
+      .ul-banners{ display:grid; grid-template-columns: 1fr 240px; gap:12px; margin-top:14px; }
+      .ul-banner{ border-radius:14px; overflow:hidden; border:1px solid var(--ul-line); background:rgba(255,255,255,.03); }
+      .ul-banner a{ display:block; text-decoration:none; }
+      .ul-banner img{ width:100%; height:100%; object-fit:cover; display:block; }
+      .ul-banner-wide{ height:110px; }
+      .ul-banner-square{ height:110px; }
+
+      @media (max-width: 840px){
+        .ul-banners{ grid-template-columns:1fr; }
+        .ul-banner-square{ height:120px; }
+      }
+
+      .ul-kv{ margin-top:14px; padding:14px; border:1px solid var(--ul-line); border-radius:14px; background:rgba(255,255,255,.03); }
+      .ul-kv h1{ margin:0; font-size:22px; }
+      .ul-kv p{ margin:8px 0 0; color:var(--ul-muted); line-height:1.45; }
+
+      .ul-loading{ padding:18px; color:var(--ul-muted); }
+      .ul-error{ padding:14px; border:1px solid rgba(192,1,2,.35); background:rgba(192,1,2,.12); border-radius:14px; }
+      .ul-error b{ display:block; margin-bottom:6px; }
+
+      .ul-meta{ margin-top:12px; color:var(--ul-muted); font-size:12px; }
+    `;
+    const style = document.createElement("style");
+    style.id = "ulydia-metier-css";
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  // =========================================================
+  // Utilities
+  // =========================================================
+  function pickStr(v){
+    if (v == null) return "";
+    if (typeof v === "string") return v.trim();
+    return String(v).trim();
+  }
+
+  function countryISO(c){
+    if (!c) return "";
+    const v =
+      c.iso ||
+      c.code_iso ||
+      c.codeIso ||
+      c.ISO ||
+      c.countryCode ||
+      c.country_code ||
+      c.code ||
+      c.codePays ||
+      c.alpha2 ||
+      c.alpha_2 ||
+      c.iso2 ||
+      c.iso_2 ||
+      c.slug || // last fallback (might be "france" => not usable)
+      "";
+    return pickStr(v).toUpperCase();
+  }
+
+  function countryLabel(c){
+    return pickStr(c?.label || c?.name || c?.pays || c?.country || c?.title || c?.slug || countryISO(c) || "—");
+  }
+
+  function safeJSON(text){
+    try { return JSON.parse(text || "null"); } catch(e){ return null; }
+  }
+
+  async function fetchJSON(path, { timeoutMs = 12000 } = {}){
+    const url = path.startsWith("http") ? path : (WORKER_URL + path);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
+    const headers = {
+      "accept": "application/json",
+      "x-proxy-secret": PROXY_SECRET,
+      "x-ulydia-proxy-secret": PROXY_SECRET
+    };
+
+    try {
+      const r = await fetch(url, { headers, signal: ctrl.signal, credentials: "omit" });
+      const txt = await r.text();
+      const j = safeJSON(txt);
+      if (!r.ok) {
+        throw new Error(`HTTP ${r.status} ${r.statusText} @ ${path} :: ${txt.slice(0,200)}`);
+      }
+      return j;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  // =========================================================
+  // Read slugs / params
+  // =========================================================
+  function getParam(name){
     const u = new URL(location.href);
-    const metier = (u.searchParams.get("metier") || u.searchParams.get("slug") || "").trim();
-    const country = (u.searchParams.get("country") || u.searchParams.get("iso") || "").trim().toUpperCase();
-    return { metier, country };
+    return pickStr(u.searchParams.get(name));
   }
 
-  function pick(obj, keys){
-    for (const k of keys){
-      if (obj && obj[k] != null && String(obj[k]).trim() !== "") return obj[k];
+  function detectSlug(){
+    // priority: ?slug=xxx
+    const q = getParam("slug");
+    if (q) return q;
+
+    // fallback: /metier/xxx or /fiche-metiers/xxx patterns
+    const p = location.pathname.split("/").filter(Boolean);
+    const last = p[p.length - 1] || "";
+    // Avoid using "metier" itself as slug
+    if (last && last !== "metier" && last !== "fiche-metiers") return last;
+    return "";
+  }
+
+  function setURLParams(params){
+    const u = new URL(location.href);
+    Object.keys(params || {}).forEach(k => {
+      const v = params[k];
+      if (v == null || v === "") u.searchParams.delete(k);
+      else u.searchParams.set(k, String(v));
+    });
+    history.replaceState({}, "", u.toString());
+  }
+
+  // =========================================================
+  // Countries loading
+  // =========================================================
+  async function loadFiltersFromWorker(){
+    // best source: /v1/filters
+    const j = await fetchJSON("/v1/filters");
+    const countries = Array.isArray(j?.countries) ? j.countries : [];
+    const sectors   = Array.isArray(j?.sectors) ? j.sectors : [];
+    const metiers   = Array.isArray(j?.metiers) ? j.metiers : [];
+    return { countries, sectors, metiers, raw: j };
+  }
+
+  function loadCountriesFromChunks(){
+    // fallback only: read countriesData, countriesData2, countriesData3...
+    const nodes = Array.from(document.querySelectorAll('[id^="countriesData"]'));
+    let all = [];
+    nodes.forEach(el => {
+      const arr = safeJSON(el.textContent || "[]");
+      if (Array.isArray(arr)) all = all.concat(arr);
+    });
+    return all;
+  }
+
+  function normalizeCountries(list){
+    const arr = Array.isArray(list) ? list.slice() : [];
+    // keep only objects
+    const clean = arr.filter(x => x && typeof x === "object");
+    // de-dupe by ISO if possible else label
+    const seen = new Set();
+    const out = [];
+    for (const c of clean) {
+      const iso = countryISO(c);
+      const key = iso ? `iso:${iso}` : `lbl:${countryLabel(c).toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(c);
+    }
+    // Sort by label for UX
+    out.sort((a,b) => countryLabel(a).localeCompare(countryLabel(b), "fr", { sensitivity:"base" }));
+    return out;
+  }
+
+  // =========================================================
+  // GEO
+  // =========================================================
+  async function detectGeoISO(){
+    try {
+      const j = await fetchJSON("/v1/geo", { timeoutMs: 9000 });
+      const iso = pickStr(j?.iso).toUpperCase();
+      if (iso) return iso;
+    } catch(e){
+      log("geo failed", e?.message || e);
     }
     return "";
   }
 
-  async function detectVisitorISO(){
-    const u = new URL(location.href);
-    const forced = u.searchParams.get("country") || u.searchParams.get("iso");
-    if (forced) return String(forced).toUpperCase();
-
-    if (!IPINFO_TOKEN) return "";
-    try{
-      const r = await fetch(`https://ipinfo.io/json?token=${encodeURIComponent(IPINFO_TOKEN)}`, { cache: "no-store" });
-      if (!r.ok) return "";
-      const j = await r.json();
-      return String(j?.country || "").toUpperCase();
-    }catch(e){
-      return "";
-    }
+  // =========================================================
+  // Resolve selected country
+  // =========================================================
+  function findCountryByISO(countries, iso){
+    const needle = pickStr(iso).toUpperCase();
+    if (!needle) return null;
+    return countries.find(c => {
+      const x = countryISO(c);
+      return x === needle || /[-_]?([A-Z]{2})$/.test(x) && x.endsWith(needle);
+    }) || null;
   }
 
-  async function fetchMetierMeta({ slug, iso }){
-    const url = new URL(WORKER_URL.replace(/\/$/, "") + "/v1/metier-page");
-    url.searchParams.set("slug", slug);
-    url.searchParams.set("iso", iso);
-    const headers = {};
-    if (PROXY_SECRET) {
-      headers["x-proxy-secret"] = PROXY_SECRET;
-      headers["x-ulydia-proxy-secret"] = PROXY_SECRET;
-    }
-    const r = await fetch(url.toString(), { headers, cache: "no-store" });
-    if (!r.ok) throw new Error("metier meta fetch failed: " + r.status);
-    return await r.json();
+  function resolveSelectedISO({ countries, urlISO, geoISO }){
+    // 1) URL if valid
+    const fromURL = findCountryByISO(countries, urlISO);
+    if (fromURL) return countryISO(fromURL);
+
+    // 2) GEO if valid
+    const fromGEO = findCountryByISO(countries, geoISO);
+    if (fromGEO) return countryISO(fromGEO);
+
+    // 3) FR if present
+    const fromFR = findCountryByISO(countries, "FR");
+    if (fromFR) return "FR";
+
+    // 4) first with a usable ISO
+    const first = countries.find(c => /^[A-Z]{2}$/.test(countryISO(c)));
+    if (first) return countryISO(first);
+
+    // 5) total fallback
+    return "";
   }
 
-  function ensureRoot(){
-    let root = document.getElementById("ulydia-metier-root");
-    if (!root){
-      root = document.createElement("div");
-      root.id = "ulydia-metier-root";
-      document.body.prepend(root);
-    }
-    return root;
-  }
-
-  function hideCmsScaffolding(){
-    qsa('[data-ul-hide-cms="1"], .ulydia-hide-cms, [data-metier-cms="1"]').forEach(el => {
-      el.style.display = "none";
-    });
-  }
-
-  function injectCSS(){
-    if (document.getElementById("ulydia-metier-css-v52")) return;
-    const css = document.createElement("style");
-    css.id = "ulydia-metier-css-v52";
-    css.textContent = `
-      #ulydia-metier-root{ font-family: var(--ul-font, Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Arial); }
-      .ul-wrap{ max-width: 1060px; margin: 0 auto; padding: 28px 18px 80px; }
-      .ul-card{ background: var(--ul-surface, #fff); border: 1px solid var(--ul-border, #e7e7ee); border-radius: 16px; box-shadow: var(--ul-shadow, 0 14px 40px rgba(20,20,30,.06)); }
-      .ul-card.pad{ padding: 18px; }
-      .ul-h1{ font-size: 30px; letter-spacing: -0.02em; margin: 0 0 10px; color: var(--ul-text, #0f172a); }
-      .ul-muted{ color: var(--ul-muted, #64748b); font-size: 14px; }
-      .ul-grid{ display:grid; grid-template-columns: 1.25fr .75fr; gap: 18px; align-items:start; }
-      @media (max-width: 920px){ .ul-grid{ grid-template-columns: 1fr; } }
-      .ul-row{ display:flex; gap: 12px; flex-wrap: wrap; }
-      .ul-field{ display:flex; flex-direction:column; gap: 6px; min-width: 220px; flex: 1; }
-      .ul-label{ font-size: 12px; color: var(--ul-muted, #64748b); }
-      .ul-input, .ul-select{
-        height: 44px; padding: 0 12px; border-radius: 12px;
-        border: 1px solid var(--ul-border, #e7e7ee);
-        background: #fff; font-size: 14px; outline: none;
-      }
-      .ul-input:focus, .ul-select:focus{ border-color: var(--ul-primary, #c00102); box-shadow: 0 0 0 3px rgba(192,1,2,.12); }
-      .ul-divider{ height: 1px; background: var(--ul-border, #e7e7ee); margin: 14px 0; }
-      .ul-list{ display:flex; flex-direction:column; gap: 10px; margin-top: 14px; }
-      .ul-item{ display:flex; justify-content:space-between; gap: 12px; align-items:center; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--ul-border, #e7e7ee); background:#fff; }
-      .ul-item:hover{ border-color: rgba(192,1,2,.35); }
-      .ul-item h3{ margin:0; font-size: 16px; }
-      .ul-item p{ margin: 2px 0 0; font-size: 13px; color: var(--ul-muted, #64748b); }
-      .ul-btn{
-        display:inline-flex; align-items:center; gap:8px;
-        padding: 10px 12px; border-radius: 12px;
-        border: 1px solid var(--ul-border, #e7e7ee);
-        background: #fff; cursor: pointer;
-        font-weight: 600; font-size: 13px;
-      }
-      .ul-banner-wide{ width: 680px; max-width: 100%; height: 120px; border-radius: 14px; overflow:hidden; border: 1px solid var(--ul-border, #e7e7ee); background:#f6f7fb; }
-      .ul-banner-wide img{ width:100%; height:100%; object-fit: cover; display:block; }
-      .ul-banner-square{ width: 100%; aspect-ratio: 1/1; border-radius: 16px; overflow:hidden; border: 1px solid var(--ul-border, #e7e7ee); background:#f6f7fb; }
-      .ul-banner-square img{ width:100%; height:100%; object-fit: cover; display:block; }
-      .ul-section-title{ margin: 0 0 10px; font-size: 16px; }
-      .ul-rich p{ line-height: 1.6; margin: 0 0 10px; }
-      .ul-badges{ display:flex; gap:8px; flex-wrap:wrap; margin-top: 10px; }
-      .ul-badge{ font-size: 12px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--ul-border, #e7e7ee); background:#fff; color: var(--ul-text, #0f172a); }
-    `;
-    document.head.appendChild(css);
-  }
-
-  function renderShell(root){
-    root.innerHTML = `
+  // =========================================================
+  // UI render
+  // =========================================================
+  function renderShell(){
+    ROOT.innerHTML = `
       <div class="ul-wrap">
-        <div class="ul-card pad" id="ul-search-card">
-          <div class="ul-row">
-            <div class="ul-field">
-              <div class="ul-label">Country</div>
-              <select class="ul-select" id="ulCountry"></select>
+        <div class="ul-card">
+          <div class="ul-head">
+            <div>
+              <div class="ul-title">Fiche métier</div>
+              <div class="ul-sub">Pays par défaut = visiteur (GEO) sauf si l’URL force un pays valide</div>
             </div>
-            <div class="ul-field">
-              <div class="ul-label">Sector</div>
-              <select class="ul-select" id="ulSector" disabled></select>
-            </div>
-            <div class="ul-field" style="min-width:260px">
-              <div class="ul-label">Job</div>
-              <input class="ul-input" id="ulSearch" placeholder="Search a job (e.g., Directeur financier)" disabled />
+            <div class="ul-actions">
+              <button class="ul-btn" data-action="debug">Debug</button>
             </div>
           </div>
-          <div class="ul-divider"></div>
-          <div class="ul-muted" id="ulHint">Choose a country, then a sector, then a job.</div>
-          <div class="ul-list" id="ulResults"></div>
+          <div class="ul-body">
+            <div class="ul-row">
+              <div class="ul-field">
+                <div class="ul-label">Pays</div>
+                <select class="ul-select" data-el="country"></select>
+              </div>
+              <div class="ul-field">
+                <div class="ul-label">Slug métier</div>
+                <input class="ul-input" data-el="slug" placeholder="ex: directeur-financier" />
+              </div>
+              <div class="ul-field" style="min-width:160px; flex:0;">
+                <div class="ul-label">&nbsp;</div>
+                <button class="ul-btn primary" data-action="load">Charger</button>
+              </div>
+            </div>
+
+            <div class="ul-meta" data-el="meta"></div>
+
+            <div class="ul-banners" data-el="banners" style="display:none;">
+              <div class="ul-banner ul-banner-wide"><a target="_blank" rel="noopener" class="ul-banner-wide-a"><img class="ul-banner-wide-img" alt=""></a></div>
+              <div class="ul-banner ul-banner-square"><a target="_blank" rel="noopener" class="ul-banner-square-a"><img class="ul-banner-square-img" alt=""></a></div>
+            </div>
+
+            <div class="ul-kv" data-el="kv" style="display:none;">
+              <h1 data-el="name"></h1>
+              <p data-el="desc"></p>
+            </div>
+
+            <div class="ul-loading" data-el="status">Chargement…</div>
+            <div class="ul-error" data-el="error" style="display:none;"></div>
+          </div>
         </div>
-
-        <div style="height: 16px"></div>
-
-        <div id="ulDetail"></div>
       </div>
     `;
   }
 
-  function optionHtml(value, label){
-    return `<option value="${esc(value)}">${esc(label || value)}</option>`;
+  function setStatus(txt){
+    const el = ROOT.querySelector('[data-el="status"]');
+    if (el) el.textContent = txt || "";
   }
 
-  function buildCountrySelect(countries){
-    const opts = [optionHtml("", "Select a country")];
-    for (const c of countries){
-      const iso = String(pick(c, ["iso","ISO","code","country"]) || "").toUpperCase();
-      if (!iso) continue;
-      const name = pick(c, ["name","nom","label","pays"]) || iso;
-      opts.push(optionHtml(iso, name));
-    }
-    return opts.join("");
-  }
-
-  function computeLangFinal(country){
-    return String(pick(country, ["langue_finale","langFinal","lang","language"]) || "").toLowerCase();
-  }
-
-  function buildSectorOptions(sectors, langFinal){
-    const filtered = sectors.filter(s => {
-      const sLang = String(pick(s, ["lang","language","langue"]) || "").toLowerCase();
-      return !sLang || !langFinal || sLang === langFinal;
-    });
-    const seen = new Set();
-    const out = [];
-    for (const s of filtered){
-      const slug = String(pick(s, ["slug","id","value"]) || "").trim();
-      if (!slug || seen.has(slug)) continue;
-      seen.add(slug);
-      const name = pick(s, ["name","nom","label","title"]) || slug;
-      out.push({ slug, name });
-    }
-    out.sort((a,b)=>a.name.localeCompare(b.name, "fr", { sensitivity:"base" }));
-    return out;
-  }
-
-  function normalizeMetiers(metiers){
-    return (metiers || []).map(m => {
-      const slug = String(pick(m, ["slug","id"]) || "").trim();
-      const secteur = String(pick(m, ["secteur","sector","secteur_slug"]) || "").trim();
-      const name = pick(m, ["name","nom","title","titre"]) || slug;
-      return { slug, secteur, name: String(name) };
-    }).filter(x => x.slug);
-  }
-
-  function filterMetiers(metiers, { secteurSlug, q }){
-    const qq = String(q || "").toLowerCase().trim();
-    return metiers.filter(m => {
-      if (secteurSlug && m.secteur !== secteurSlug) return false;
-      if (!qq) return true;
-      return m.name.toLowerCase().includes(qq) || m.slug.toLowerCase().includes(qq);
-    }).slice(0, 80);
-  }
-
-  function renderResults(listEl, items, { iso }){
-    if (!items.length){
-      listEl.innerHTML = `<div class="ul-muted" style="padding:10px 2px">No results.</div>`;
-      return;
-    }
-    listEl.innerHTML = items.map(m => `
-      <div class="ul-item">
-        <div>
-          <h3>${esc(m.name)}</h3>
-          <p>${esc(m.slug)}</p>
-        </div>
-        <button class="ul-btn" data-open="${esc(m.slug)}">Open →</button>
-      </div>
-    `).join("");
-    listEl.querySelectorAll("[data-open]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const slug = btn.getAttribute("data-open") || "";
-        if (!slug) return;
-        const url = new URL(location.origin + "/metier");
-        url.searchParams.set("metier", slug);
-        if (iso) url.searchParams.set("country", iso);
-        location.href = url.toString();
-      });
-    });
-  }
-
-  function setBanner(el, imgUrl, linkUrl){
+  function showError(title, msg){
+    const el = ROOT.querySelector('[data-el="error"]');
     if (!el) return;
-    const safeImg = String(imgUrl || "").trim();
-    const safeLink = String(linkUrl || "").trim();
-    el.innerHTML = safeImg ? `<img alt="" src="${esc(safeImg)}" />` : "";
-    if (safeLink){
-      el.style.cursor = "pointer";
-      el.onclick = () => window.open(safeLink, "_blank", "noopener");
-    } else {
-      el.style.cursor = "default";
-      el.onclick = null;
-    }
+    el.style.display = "";
+    el.innerHTML = `<b>${escapeHTML(title || "Erreur")}</b><div>${escapeHTML(msg || "")}</div>`;
   }
 
-  function renderDetail(detailRoot, { metierObj, iso, meta }){
-    if (!metierObj){
-      detailRoot.innerHTML = "";
+  function hideError(){
+    const el = ROOT.querySelector('[data-el="error"]');
+    if (el) el.style.display = "none";
+  }
+
+  function escapeHTML(s){
+    return String(s || "").replace(/[&<>"']/g, (m) => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[m]));
+  }
+
+  function setMeta(obj){
+    const el = ROOT.querySelector('[data-el="meta"]');
+    if (!el) return;
+    el.textContent = obj ? JSON.stringify(obj) : "";
+  }
+
+  function populateCountries(selectEl, countries, selectedISO){
+    selectEl.innerHTML = "";
+    countries.forEach(c => {
+      const iso = countryISO(c);
+      const opt = document.createElement("option");
+      opt.value = iso || countryLabel(c);
+      opt.textContent = `${countryLabel(c)}${iso ? ` (${iso})` : ""}`;
+      if (iso && iso === selectedISO) opt.selected = true;
+      selectEl.appendChild(opt);
+    });
+  }
+
+  function setBanner(anchorEl, imgEl, imgUrl, clickUrl){
+    const a = anchorEl;
+    const img = imgEl;
+    if (!imgUrl) {
+      if (a) a.removeAttribute("href");
+      if (img) img.removeAttribute("src");
       return;
     }
-
-    const title = metierObj.name || metierObj.slug;
-    const desc = String(pick(meta?.metier, ["description","desc"]) || "").trim();
-
-    const sponsor = meta?.sponsor || meta?.meta?.sponsor || null;
-    const pays = meta?.pays || meta?.country || null;
-
-    const sponsorLink = sponsor ? (pick(sponsor, ["link","url","website"]) || "") : "";
-    const wideUrl = sponsor
-      ? (pick(sponsor, ["logo_2","logo_wide","wide","banner_wide"]) || "")
-      : (pays ? pick(pays?.banners, ["wide","banner_wide","logo_2"]) : "");
-    const squareUrl = sponsor
-      ? (pick(sponsor, ["logo_1","logo_square","square","banner_square"]) || "")
-      : (pays ? pick(pays?.banners, ["square","banner_square","logo_1"]) : "");
-
-    detailRoot.innerHTML = `
-      <div class="ul-grid">
-        <div class="ul-card pad">
-          <div class="ul-muted" style="margin-bottom:6px">${esc(iso || "")}</div>
-          <h1 class="ul-h1">${esc(title)}</h1>
-
-          <div style="margin: 10px 0 14px">
-            <div class="ul-banner-wide" id="ulWide"></div>
-          </div>
-
-          <div class="ul-divider"></div>
-
-          <h2 class="ul-section-title">Overview</h2>
-          <div class="ul-rich">
-            ${desc ? `<p>${esc(desc)}</p>` : `<p class="ul-muted">No description yet.</p>`}
-          </div>
-
-          <div id="ulBlocs"></div>
-          <div id="ulFaq"></div>
-        </div>
-
-        <div class="ul-card pad">
-          <h2 class="ul-section-title">Sponsor</h2>
-          <div class="ul-banner-square" id="ulSquare"></div>
-          <div class="ul-muted" style="margin-top:10px">
-            ${sponsor ? "Sponsored content" : "Non-sponsored banner (language-based fallback)"}
-          </div>
-        </div>
-      </div>
-    `;
-
-    setBanner(qs("#ulWide", detailRoot), wideUrl, sponsorLink);
-    setBanner(qs("#ulSquare", detailRoot), squareUrl, sponsorLink);
+    if (img) img.src = imgUrl;
+    if (a) a.href = clickUrl || "#";
   }
 
+  // =========================================================
+  // Banner picking logic (sponsor vs non-sponsor)
+  // =========================================================
+  function pickBannerURLs(payload){
+    // payload likely: { metier, pays, meta? }
+    // Try sponsor first:
+    const meta = payload?.meta || {};
+    const sponsor = meta?.sponsor || payload?.sponsor || null;
+
+    const sponsorLink = pickStr(
+      sponsor?.link ||
+      sponsor?.url ||
+      sponsor?.website ||
+      meta?.sponsorLink ||
+      ""
+    );
+
+    const wideSponsor = pickStr(
+      sponsor?.logo_2 ||
+      sponsor?.logo_wide ||
+      sponsor?.wide ||
+      sponsor?.banner_wide ||
+      ""
+    );
+
+    const squareSponsor = pickStr(
+      sponsor?.logo_1 ||
+      sponsor?.logo_square ||
+      sponsor?.square ||
+      sponsor?.banner_square ||
+      ""
+    );
+
+    if (wideSponsor || squareSponsor) {
+      return {
+        mode: "sponsor",
+        wide: wideSponsor,
+        square: squareSponsor,
+        click: sponsorLink || "#"
+      };
+    }
+
+    // Fallback non-sponsor: from pays banners by langue_finale
+    const pays = payload?.pays || payload?.country || {};
+    const banners = pays?.banners || {};
+
+    const wideFallback = pickStr(
+      banners?.wide ||
+      banners?.attente ||
+      banners?.pending ||
+      banners?.sponsorisation ||
+      pays?.banner_attente ||
+      ""
+    );
+
+    const squareFallback = pickStr(
+      banners?.square ||
+      banners?.attente_square ||
+      banners?.pending_square ||
+      pays?.banner_square ||
+      ""
+    );
+
+    return {
+      mode: "fallback",
+      wide: wideFallback,
+      square: squareFallback,
+      click: "#" // you can set a "become sponsor" page later
+    };
+  }
+
+  // =========================================================
+  // Load metier page payload
+  // =========================================================
+  async function loadMetierPayload({ slug, iso }){
+    const qs = new URLSearchParams({ slug, iso });
+    return await fetchJSON(`/v1/metier-page?${qs.toString()}`, { timeoutMs: 15000 });
+  }
+
+  function renderPayload(payload){
+    // banners
+    const bannersWrap = ROOT.querySelector('[data-el="banners"]');
+    const wideA = ROOT.querySelector(".ul-banner-wide-a");
+    const wideI = ROOT.querySelector(".ul-banner-wide-img");
+    const sqA = ROOT.querySelector(".ul-banner-square-a");
+    const sqI = ROOT.querySelector(".ul-banner-square-img");
+
+    const picked = pickBannerURLs(payload);
+    log("banner picked", picked);
+
+    if (picked.wide || picked.square) {
+      bannersWrap.style.display = "";
+      setBanner(wideA, wideI, picked.wide, picked.click);
+      setBanner(sqA, sqI, picked.square, picked.click);
+    } else {
+      bannersWrap.style.display = "none";
+    }
+
+    // metier
+    const kv = ROOT.querySelector('[data-el="kv"]');
+    const nameEl = ROOT.querySelector('[data-el="name"]');
+    const descEl = ROOT.querySelector('[data-el="desc"]');
+
+    const metier = payload?.metier || {};
+    const name = pickStr(metier?.name || metier?.title || metier?.label || metier?.slug || "");
+    const desc = pickStr(metier?.description || metier?.short_description || metier?.resume || "");
+
+    if (name) {
+      kv.style.display = "";
+      nameEl.textContent = name;
+      descEl.textContent = desc || "";
+    } else {
+      kv.style.display = "none";
+    }
+  }
+
+  // =========================================================
+  // MAIN
+  // =========================================================
   async function main(){
     injectCSS();
+    renderShell();
+    hideError();
 
-    // IMPORTANT: keep CMS wrappers visible in Designer, but hide them on the real page
-    hideCmsScaffolding();
+    const slugFromURL = detectSlug();
+    const urlISO = pickStr(getParam("country") || getParam("iso") || getParam("pays")).toUpperCase();
 
-    const root = ensureRoot();
-    renderShell(root);
+    const countrySel = ROOT.querySelector('[data-el="country"]');
+    const slugInput  = ROOT.querySelector('[data-el="slug"]');
 
-    const countries = readJsonScript("countriesData", []);
-    const sectors   = readJsonScript("sectorsData", []);
-    const metiers   = normalizeMetiers(readJsonScript("metiersData", []));
+    slugInput.value = slugFromURL || pickStr(getParam("metier")) || "";
 
-    log("cms loaded", { countries: countries.length, sectors: sectors.length, metiers: metiers.length });
+    setStatus("Chargement des pays…");
 
-    const elCountry = qs("#ulCountry", root);
-    const elSector  = qs("#ulSector", root);
-    const elSearch  = qs("#ulSearch", root);
-    const elResults = qs("#ulResults", root);
-    const elDetail  = qs("#ulDetail", root);
-    const elHint    = qs("#ulHint", root);
+    let filters = null;
+    let countries = [];
+    let geoISO = "";
 
-    const { metier: paramMetier, country: paramCountry } = getURLParams();
+    // 1) GEO (in parallel-ish, but safe)
+    geoISO = await detectGeoISO();
+    log("geoISO", geoISO);
 
-    let iso = paramCountry || (await detectVisitorISO()) || "";
-    if (!iso && countries.length) iso = String(pick(countries[0], ["iso","ISO","code"]) || "").toUpperCase();
-
-    elCountry.innerHTML = buildCountrySelect(countries);
-    elCountry.value = iso || "";
-
-    let langFinal = "";
-    let sectorOptions = [];
-    let selectedSector = "";
-
-    function refreshSectors(){
-      iso = String(elCountry.value || "").toUpperCase();
-      const c = countries.find(x => String(pick(x, ["iso","ISO","code","country"]) || "").toUpperCase() === iso) || null;
-      langFinal = computeLangFinal(c);
-      sectorOptions = buildSectorOptions(sectors, langFinal);
-
-      elSector.innerHTML = optionHtml("", "Select a sector") + sectorOptions.map(s => optionHtml(s.slug, s.name)).join("");
-      elSector.disabled = false;
-      elSector.value = selectedSector && sectorOptions.some(s=>s.slug===selectedSector) ? selectedSector : "";
-
-      if (!elSector.value){
-        elSearch.value = "";
-        elSearch.disabled = true;
-        elResults.innerHTML = "";
-        elHint.textContent = "Select a sector to see jobs.";
-      } else {
-        elSearch.disabled = false;
-        elHint.textContent = "Search and select a job to open the detail page.";
-      }
+    // 2) Countries: prefer /v1/filters
+    try {
+      filters = await loadFiltersFromWorker();
+      countries = normalizeCountries(filters.countries);
+      log("cms loaded", { countries: countries.length });
+    } catch(e){
+      warn("filters failed, fallback chunks", e?.message || e);
+      const chunkCountries = loadCountriesFromChunks();
+      countries = normalizeCountries(chunkCountries);
+      log("chunks loaded", { countries: countries.length });
     }
 
-    function refreshJobs(){
-      selectedSector = String(elSector.value || "");
-      if (!selectedSector){
-        elSearch.disabled = true;
-        elResults.innerHTML = "";
-        elHint.textContent = "Select a sector to see jobs.";
+    // Debug first object keys (what you asked: stop guessing)
+    const first = countries[0] || null;
+    log("first country object", first);
+    log("first keys", first ? Object.keys(first) : []);
+
+    // 3) resolve selected ISO
+    const selectedISO = resolveSelectedISO({ countries, urlISO, geoISO });
+    log("resolve ISO", { urlISO, geoISO, selectedISO });
+
+    // 4) fill select
+    populateCountries(countrySel, countries, selectedISO);
+
+    // 5) Update URL (only if URL iso invalid or missing)
+    // (We do not override valid URL choice)
+    const urlValid = !!findCountryByISO(countries, urlISO);
+    if (!urlValid && selectedISO) {
+      setURLParams({ country: selectedISO });
+    }
+
+    setMeta({
+      countries: countries.length,
+      urlISO: urlISO || null,
+      geoISO: geoISO || null,
+      selectedISO: selectedISO || null
+    });
+
+    setStatus("Prêt.");
+
+    // Events
+    ROOT.querySelector('[data-action="debug"]').addEventListener("click", () => {
+      const isoNow = pickStr(countrySel.value).toUpperCase();
+      const c = findCountryByISO(countries, isoNow);
+      console.log("=== DEBUG COUNTRIES ===");
+      console.log("countries.len", countries.length);
+      console.log("selectedISO", isoNow);
+      console.log("matched country obj", c);
+      console.log("keys", c ? Object.keys(c) : []);
+      console.log("=======================");
+      alert("Debug envoyé dans la console.");
+    });
+
+    ROOT.querySelector('[data-action="load"]').addEventListener("click", async () => {
+      hideError();
+
+      const slug = pickStr(slugInput.value);
+      const iso = pickStr(countrySel.value).toUpperCase();
+
+      if (!slug) {
+        showError("Slug manquant", "Renseigne un slug métier (ou passe ?slug=...)");
         return;
       }
-      elSearch.disabled = false;
-      const list = filterMetiers(metiers, { secteurSlug: selectedSector, q: elSearch.value });
-      renderResults(elResults, list, { iso });
-      elHint.textContent = list.length ? "Select a job to open the detail page (banner + blocs + FAQ)." : "No jobs found for this sector.";
-    }
-
-    elCountry.addEventListener("change", () => {
-      selectedSector = "";
-      refreshSectors();
-      refreshJobs();
-    });
-    elSector.addEventListener("change", () => refreshJobs());
-    elSearch.addEventListener("input", debounce(()=>refreshJobs(), 120));
-
-    refreshSectors();
-    refreshJobs();
-
-    if (paramMetier && iso){
-      try{
-        const meta = await fetchMetierMeta({ slug: paramMetier, iso });
-        const metierObj = metiers.find(m => m.slug === paramMetier) || { slug: paramMetier, name: paramMetier, secteur: "" };
-        renderDetail(elDetail, { metierObj, iso, meta });
-      }catch(e){
-        console.error("[metier-page.v5.2] detail fetch failed", e);
+      if (!iso) {
+        showError("Pays invalide", "Impossible de déterminer un ISO pays.");
+        return;
       }
+
+      setStatus(`Chargement métier "${slug}" pour ${iso}…`);
+      setURLParams({ slug, country: iso });
+
+      try {
+        const payload = await loadMetierPayload({ slug, iso });
+        log("payload", payload);
+        renderPayload(payload);
+        setStatus("OK.");
+      } catch(e){
+        showError("Erreur Worker", e?.message || String(e));
+        setStatus("Erreur.");
+      }
+    });
+
+    // Auto-load if we already have a slug
+    if (slugInput.value && selectedISO) {
+      ROOT.querySelector('[data-action="load"]').click();
     }
   }
 
-  main().catch(e => console.error("[metier-page.v5.2] fatal", e));
+  main().catch((e) => {
+    console.error("[metier-page] fatal", e);
+    try { showError("Fatal", e?.message || String(e)); } catch(_){}
+  });
+
 })();
