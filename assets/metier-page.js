@@ -111,10 +111,16 @@
 
   function pickUrl(v){
     if (!v) return "";
-    if (typeof v === "string") return v.trim();
-    if (typeof v === "object" && v.url) return String(v.url).trim();
-    return "";
+    let s = "";
+    if (typeof v === "string") s = v.trim();
+    else if (typeof v === "object" && v.url) s = String(v.url).trim();
+
+    if (!s) return "";
+    if (s.includes("...")) return "";           // 🔒 bloque placeholders
+    if (!/^https?:\/\//i.test(s)) return "";    // 🔒 bloque relatif
+    return s;
   }
+
 
   function pickCountryBanners(countryMeta){
     const bannersObj = countryMeta?.banners || {};
