@@ -1,0 +1,11 @@
+{
+  "iso": "ZW",
+  "label": "Zimbabwe",
+  "langue_finale": "en",
+  "banners": {
+    "image_1": "https://.../banniere_sponsorisation_image_1.png",
+    "image_2": "https://.../banniere_sponsorisation_image_2.png",
+    "texte": "…",
+    "cta": "…"
+  }
+}
