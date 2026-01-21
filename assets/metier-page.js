@@ -591,43 +591,8 @@ function pickCountryBanners(countryMeta){
 }
 
 
-  const fastSquare = pickStr(
-    bannersObj?.image_2 ||
-    bannersObj?.banniere_sponsorisation_image_2 ||
-    countryMeta?.banniere_sponsorisation_image_2 ||
-    countryMeta?.image_2 ||
-    ""
-  );
 
-  if (isUrl(fastWide) || isUrl(fastSquare)) {
-    return {
-      mode: "fallback",
-      wide: isUrl(fastWide) ? fastWide : "",
-      square: isUrl(fastSquare) ? fastSquare : "",
-      click: "#",
-      texte: pickStr(bannersObj?.texte || countryMeta?.banniere_sponsorisation_texte || countryMeta?.texte || ""),
-      cta: pickStr(bannersObj?.cta || countryMeta?.banniere_sponsorisation_cta || countryMeta?.cta || "")
-    };
-  }
 
-  // 2) Robust mode: scan for URLs in payload.pays and payload.pays.banners
-  const urls = [];
-  collectUrlsDeep(bannersObj, urls, 3);
-  collectUrlsDeep(countryMeta, urls, 3);
-
-  // de-dup
-  const uniq = [];
-  urls.forEach(u => { if (!uniq.includes(u)) uniq.push(u); });
-
-  return {
-    mode: "fallback",
-    wide: uniq[0] || "",
-    square: uniq[1] || uniq[0] || "",
-    click: "#",
-    texte: pickStr(bannersObj?.texte || countryMeta?.texte || ""),
-    cta: pickStr(bannersObj?.cta || countryMeta?.cta || "")
-  };
-}
 
 
   // =========================
