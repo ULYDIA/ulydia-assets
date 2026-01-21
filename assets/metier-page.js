@@ -19,7 +19,7 @@
 
   // ✅ Put your catalog.json on Cloudflare Pages assets (recommended)
   // Example: https://ulydia-assets.pages.dev/assets/catalog.json?v=1
-  const CATALOG_URL  = "https://ulydia-assets.pages.dev/assets/catalog.json?v=1";
+  const CATALOG_URL  = "https://ulydia-assets.pages.dev/assets/catalog.json?v=";
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -249,16 +249,17 @@
     history.replaceState({}, "", u.toString());
   }
 
-  function detectSlug(){
-    // Priority: ?slug=...
-    const s = getParam("slug");
-    if (s) return s;
-    // fallback: last path segment if not generic
-    const seg = location.pathname.split("/").filter(Boolean);
-    const last = seg[seg.length-1] || "";
-    if (last && last !== "metier" && last !== "fiche-metiers") return last;
-    return "";
-  }
+function detectSlug(){
+  // accepte ?slug=... OU ?metier=...
+  const s = getParam("slug") || getParam("metier");
+  if (s) return s;
+
+  const seg = location.pathname.split("/").filter(Boolean);
+  const last = seg[seg.length-1] || "";
+  if (last && last !== "metier" && last !== "fiche-metiers") return last;
+  return "";
+}
+
 
   async function fetchJSON(url, { timeoutMs = 12000 } = {}){
     const full = url.startsWith("http") ? url : (WORKER_URL + url);
