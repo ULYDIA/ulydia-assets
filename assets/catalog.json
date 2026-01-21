@@ -23,6 +23,15 @@
       }
     }
   ],
-  "sectors": [],
-  "metiers": []
+  "sectors": [
+    { "id": "defense", "label": "Défense" }
+  ],
+  "metiers": [
+    {
+      "slug": "chef-de-projet-armement",
+      "label": "Chef de projet armement",
+      "sectors": ["defense"]
+    }
+  ]
 }
+
