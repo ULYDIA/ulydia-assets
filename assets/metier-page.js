@@ -1,15 +1,16 @@
-/* metier-page.js — Ulydia (v10)
-   - NO Worker changes required
-   - Loads a static catalog.json (countries + sectors + metiers)
+/* metier-page.js — Ulydia (v10.1)
+   - Static catalog.json (countries + sectors + metiers)
    - Filters: country / sector / metier autocomplete
    - Calls Worker: GET /v1/metier-page?slug=...&iso=FR
    - Banners: sponsor if present else country attente banners from catalog
-   - Design uses Ulydia design tokens v2 (Montserrat, red primary, radii, shadows)
+   - URL handling:
+       * Accepts ?metier=... as alias of ?slug=...
+       * "Simple URL mode": if landing URL is only metier+country, DO NOT add slug/sector/q automatically
 */
 
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V10__) return;
-  window.__ULYDIA_METIER_PAGE_V10__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V101__) return;
+  window.__ULYDIA_METIER_PAGE_V101__ = true;
 
   // =========================
   // CONFIG
@@ -17,9 +18,8 @@
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
 
-  // ✅ Put your catalog.json on Cloudflare Pages assets (recommended)
-  // Example: https://ulydia-assets.pages.dev/assets/catalog.json?v=1
-  const CATALOG_URL  = "https://ulydia-assets.pages.dev/assets/catalog.json?v=";
+  // ✅ Set exact URL (bump ?v=... when you update catalog.json)
+  const CATALOG_URL  = "https://ulydia-assets.pages.dev/assets/catalog.json?v=5";
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
   const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
@@ -36,7 +36,6 @@
 
   // =========================
   // Design tokens (v2)
-  // (source file provided: ulydia.design-tokens.v2.json) :contentReference[oaicite:1]{index=1}
   // =========================
   const TOK = {
     colors: {
@@ -161,9 +160,7 @@
       .ul-btn.primary:hover{ background: var(--ul-primaryHover); }
 
       /* Autocomplete dropdown */
-      .ul-suggest{
-        position:relative;
-      }
+      .ul-suggest{ position:relative; }
       .ul-suggest-list{
         position:absolute;
         left:0; right:0; top: calc(var(--ul-btn-h) + 6px);
@@ -239,6 +236,8 @@
     const u = new URL(location.href);
     return pickStr(u.searchParams.get(name));
   }
+
+  // ✅ "Rich" URL updater (kept for non-simple mode)
   function setURLParams(params){
     const u = new URL(location.href);
     Object.keys(params || {}).forEach(k => {
@@ -249,17 +248,35 @@
     history.replaceState({}, "", u.toString());
   }
 
-function detectSlug(){
-  // accepte ?slug=... OU ?metier=...
-  const s = getParam("slug") || getParam("metier");
-  if (s) return s;
+  // ✅ Simple URL mode helpers
+  function isSimpleURLMode(){
+    const u = new URL(location.href);
+    const hasMetier = !!u.searchParams.get("metier");
+    const hasSlug   = !!u.searchParams.get("slug");
+    const hasSector = !!u.searchParams.get("sector");
+    const hasQ      = !!u.searchParams.get("q");
+    // Simple = arrives with metier (and usually country) and no extras
+    return hasMetier && !hasSlug && !hasSector && !hasQ;
+  }
 
-  const seg = location.pathname.split("/").filter(Boolean);
-  const last = seg[seg.length-1] || "";
-  if (last && last !== "metier" && last !== "fiche-metiers") return last;
-  return "";
-}
+  function setSimpleURL({ metier, country }){
+    const u = new URL(location.href);
+    if (metier) u.searchParams.set("metier", String(metier));
+    if (country) u.searchParams.set("country", String(country));
+    ["slug","sector","q","iso"].forEach(k => u.searchParams.delete(k));
+    history.replaceState({}, "", u.toString());
+  }
 
+  // ✅ Accept ?metier=... as alias of ?slug=...
+  function detectSlug(){
+    const s = getParam("metier") || getParam("slug");
+    if (s) return s;
+
+    const seg = location.pathname.split("/").filter(Boolean);
+    const last = seg[seg.length-1] || "";
+    if (last && last !== "metier" && last !== "fiche-metiers") return last;
+    return "";
+  }
 
   async function fetchJSON(url, { timeoutMs = 12000 } = {}){
     const full = url.startsWith("http") ? url : (WORKER_URL + url);
@@ -282,9 +299,7 @@ function detectSlug(){
   }
 
   // =========================
-  // Catalog (static)
-  // Expected structure:
-  // { countries:[{iso,label,langue_finale,banners:{attente_wide,attente_square,attente}}], sectors:[...], metiers:[{slug,label,sectors:[]}] }
+  // Catalog
   // =========================
   async function loadCatalog(){
     const r = await fetch(CATALOG_URL, { cache: "no-store" });
@@ -437,7 +452,6 @@ function detectSlug(){
   // Suggest / autocomplete
   // =========================
   function buildMetierIndex(metiers){
-    // normalize label once
     return (metiers || []).map(m => ({
       slug: metierSlug(m),
       label: normalizeLabel(m),
@@ -455,7 +469,6 @@ function detectSlug(){
     }
     if (!query) return list.slice(0, 20);
 
-    // simple contains match
     const out = list.filter(m => m.label.toLowerCase().includes(query) || m.slug.toLowerCase().includes(query));
     return out.slice(0, 20);
   }
@@ -495,7 +508,6 @@ function detectSlug(){
   }
 
   function pickBannersFromPayload(payload){
-    // Try sponsor first:
     const meta = payload?.meta || {};
     const sponsor = meta?.sponsor || payload?.sponsor || payload?.meta?.sponsor || null;
 
@@ -518,43 +530,41 @@ function detectSlug(){
     return null;
   }
 
-function pickFallbackBannersFromCatalog(country){
-  const banners = country?.banners || {};
+  function pickFallbackBannersFromCatalog(country){
+    const banners = country?.banners || {};
 
-  // ✅ Supporte les noms Webflow EXACTS
-  const wide = String(
-    banners?.banniere_sponsorisation_image_1 ||
-    banners?.image_1 ||
-    banners?.attente_wide ||
-    banners?.wide ||
-    banners?.attente ||
-    ""
-  ).trim();
+    const wide = String(
+      banners?.banniere_sponsorisation_image_1 ||
+      banners?.image_1 ||
+      banners?.attente_wide ||
+      banners?.wide ||
+      banners?.attente ||
+      ""
+    ).trim();
 
-  const square = String(
-    banners?.banniere_sponsorisation_image_2 ||
-    banners?.image_2 ||
-    banners?.attente_square ||
-    banners?.square ||
-    banners?.attente ||
-    ""
-  ).trim();
+    const square = String(
+      banners?.banniere_sponsorisation_image_2 ||
+      banners?.image_2 ||
+      banners?.attente_square ||
+      banners?.square ||
+      banners?.attente ||
+      ""
+    ).trim();
 
-  // CTA/texte dispo si tu veux l’afficher plus tard
-  const texte = String(
-    banners?.banniere_sponsorisation_texte ||
-    banners?.texte ||
-    ""
-  ).trim();
+    const texte = String(
+      banners?.banniere_sponsorisation_texte ||
+      banners?.texte ||
+      ""
+    ).trim();
 
-  const cta = String(
-    banners?.banniere_sponsorisation_cta ||
-    banners?.cta ||
-    ""
-  ).trim();
+    const cta = String(
+      banners?.banniere_sponsorisation_cta ||
+      banners?.cta ||
+      ""
+    ).trim();
 
-  return { mode:"fallback", wide, square, click:"#", texte, cta };
-}
+    return { mode:"fallback", wide, square, click:"#", texte, cta };
+  }
 
   // =========================
   // Render content
@@ -593,7 +603,7 @@ function pickFallbackBannersFromCatalog(country){
   }
 
   // =========================
-  // Load metier payload (Worker existing)
+  // Worker payload
   // =========================
   async function loadMetierPayload({ slug, iso }){
     const qs = new URLSearchParams({ slug, iso });
@@ -612,6 +622,10 @@ function pickFallbackBannersFromCatalog(country){
     const sectorSel = ROOT.querySelector('[data-el="sector"]');
     const searchInput = ROOT.querySelector('[data-el="metierSearch"]');
     const suggestList = ROOT.querySelector('[data-el="suggestList"]');
+
+    // ✅ URL mode flags
+    const SIMPLE_MODE = isSimpleURLMode();
+    let userTouched = false;
 
     const slugFromURL = detectSlug();
     const urlISO = upper2(getParam("country") || getParam("iso") || "");
@@ -635,8 +649,7 @@ function pickFallbackBannersFromCatalog(country){
 
     setMeta(`catalog: ${countries.length} pays • ${sectors.length} secteurs • ${metierIndex.length} métiers`);
 
-    // Decide default country:
-    // URL if valid -> else GEO if valid -> else FR if exists -> else none
+    // Decide default country: URL if valid -> else GEO -> else FR -> else none
     let selectedISO = "";
     const hasURL = !!findCountry(countries, urlISO);
     if (hasURL) selectedISO = urlISO;
@@ -689,8 +702,8 @@ function pickFallbackBannersFromCatalog(country){
 
     // Prefill search
     if (urlQuery) searchInput.value = urlQuery;
+
     if (!searchInput.value && slugFromURL) {
-      // find label by slug
       const found = metierIndex.find(m => m.slug === slugFromURL);
       searchInput.value = found ? found.label : "";
       searchInput.dataset.slug = slugFromURL;
@@ -705,28 +718,53 @@ function pickFallbackBannersFromCatalog(country){
         searchInput.value = it.label;
         searchInput.dataset.slug = it.slug;
         hideSuggest(suggestList);
+
+        // If in simple mode and user picked a metier, keep URL simple (optional)
+        if (SIMPLE_MODE && !userTouched) {
+          const iso = upper2(countrySel.value);
+          if (iso) setSimpleURL({ metier: it.slug, country: iso });
+        }
       });
     }
 
     searchInput.addEventListener("input", () => {
-      // if user types, slug becomes unknown until pick
+      userTouched = true;
       searchInput.dataset.slug = "";
       refreshSuggest();
-      setURLParams({ q: searchInput.value || "", sector: sectorSel.value || "", country: countrySel.value || "" });
+
+      // ✅ Do not auto-write rich params in simple mode
+      if (!SIMPLE_MODE) {
+        setURLParams({ q: searchInput.value || "", sector: sectorSel.value || "", country: countrySel.value || "" });
+      }
     });
+
     searchInput.addEventListener("focus", refreshSuggest);
+
     document.addEventListener("click", (e) => {
       const box = ROOT.querySelector(".ul-suggest");
       if (box && !box.contains(e.target)) hideSuggest(suggestList);
     });
 
     sectorSel.addEventListener("change", () => {
+      userTouched = true;
       refreshSuggest();
-      setURLParams({ sector: sectorSel.value || "", q: searchInput.value || "", country: countrySel.value || "" });
+
+      if (!SIMPLE_MODE) {
+        setURLParams({ sector: sectorSel.value || "", q: searchInput.value || "", country: countrySel.value || "" });
+      }
     });
 
     countrySel.addEventListener("change", () => {
-      setURLParams({ country: countrySel.value || "", sector: sectorSel.value || "", q: searchInput.value || "" });
+      userTouched = true;
+
+      if (!SIMPLE_MODE) {
+        setURLParams({ country: countrySel.value || "", sector: sectorSel.value || "", q: searchInput.value || "" });
+      } else {
+        const iso = upper2(countrySel.value);
+        const m = pickStr(searchInput.dataset.slug || detectSlug());
+        if (iso && m) setSimpleURL({ metier: m, country: iso });
+        else if (iso) setSimpleURL({ metier: pickStr(getParam("metier") || ""), country: iso });
+      }
     });
 
     // Debug button
@@ -735,6 +773,7 @@ function pickFallbackBannersFromCatalog(country){
       const c = findCountry(countries, iso);
       console.log("=== METIER PAGE DEBUG ===");
       console.log("CATALOG_URL", CATALOG_URL);
+      console.log("SIMPLE_MODE", SIMPLE_MODE, "userTouched", userTouched);
       console.log("countries", countries.length, "sectors", sectors.length, "metiers", metierIndex.length);
       console.log("selected country", iso, c);
       console.log("selected sector", sectorSel.value);
@@ -753,21 +792,24 @@ function pickFallbackBannersFromCatalog(country){
         return;
       }
 
-      // slug: either picked from suggest or try resolve from typed label
+      // slug: either picked from suggest or resolve from typed label
       let slug = pickStr(searchInput.dataset.slug || "");
       if (!slug) {
         const q = pickStr(searchInput.value).toLowerCase();
         const cand = metierIndex.find(m => m.label.toLowerCase() === q);
         if (cand) slug = cand.slug;
       }
-
       if (!slug) {
         showError("Métier manquant", "Choisis un métier dans la liste (saisie assistée).");
         return;
       }
 
-      // Update URL
-      setURLParams({ slug, country: iso, sector: sectorSel.value || "", q: searchInput.value || "" });
+      // ✅ URL update
+      if (SIMPLE_MODE && !userTouched) {
+        setSimpleURL({ metier: slug, country: iso });
+      } else {
+        setURLParams({ slug, country: iso, sector: sectorSel.value || "", q: searchInput.value || "" });
+      }
 
       // Load from Worker
       setStatus(`Chargement de la fiche (${slug}) pour ${iso}…`);
@@ -788,9 +830,8 @@ function pickFallbackBannersFromCatalog(country){
 
     setStatus("Prêt.");
 
-    // Auto-load if URL already has slug+country
+    // Auto-load if URL already has metier/slug + country
     if (slugFromURL && selectedISO) {
-      // ensure slug set
       if (!searchInput.dataset.slug) searchInput.dataset.slug = slugFromURL;
       doLoad();
     }
