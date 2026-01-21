@@ -1,35 +1,29 @@
-/* metier-page.js — Ulydia (v10.2)
-   - Loads a static catalog.json (countries + sectors + metiers)
-   - Filters: country / sector / metier autocomplete
-   - Calls Worker: GET /v1/metier-page?slug=...&iso=FR
+/* metier-page.js — Ulydia (v10.3 CLEAN)
+   Full-code “Fiche métier” page (shell Webflow)
+   - Catalog (countries/sectors/metiers) from Cloudflare Pages (catalog.json)
+   - Country default from URL if valid else /v1/geo
+   - Sector filter + assisted search (datalist)
+   - Loads job payload from Worker: /v1/metier-page?slug=...&iso=FR
    - Banners:
-       * Sponsor if present (payload.meta.sponsor.*)
-       * Else fallback to country banners (payload.pays.banners first, then catalog country banners)
-   - URL:
-       * ALWAYS keep simple URL: ?metier=...&country=...
-       * Accepts ?metier=... as alias of ?slug=...
-   - Design: improved layout + renders HTML fields with innerHTML
+       sponsor => payload.meta.sponsor (logos + link)
+       else    => catalog country banners (image_1 wide, image_2 square)
 */
-
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V102__) return;
-  window.__ULYDIA_METIER_PAGE_V102__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V103__) return;
+  window.__ULYDIA_METIER_PAGE_V103__ = true;
 
   // =========================
   // CONFIG
   // =========================
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
-  const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
-
-  // ✅ Catalog JSON hosted on Cloudflare Pages
-  // Example: https://ulydia-assets.pages.dev/assets/catalog.json?v=5
-  const CATALOG_URL  = "https://ulydia-assets.pages.dev/assets/catalog.json?v=5";
-
+  const CATALOG_URL  = "https://ulydia-assets.pages.dev/assets/catalog.json?v=5"; // bump when you update catalog
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
-  const log = (...a) => DEBUG && console.log("[metier-page]", ...a);
+
+  function log(...a){ if (DEBUG) console.log("[metier-page]", ...a); }
+  function warn(...a){ console.warn("[metier-page]", ...a); }
 
   // =========================
-  // Root
+  // ROOT
   // =========================
   let ROOT = document.getElementById("ulydia-metier-root");
   if (!ROOT) {
@@ -39,209 +33,228 @@
   }
 
   // =========================
-  // Design tokens (v2-ish)
+  // Helpers
   // =========================
-  const TOK = {
-    colors: {
-      primary: "#c00102",
-      primaryHover: "#a00001",
-      text: "#101828",
-      muted: "#667085",
-      border: "#eaecf0",
-      bg: "#ffffff",
-      card: "#ffffff",
-      soft: "#f9fafb",
-      white: "#ffffff",
-      tint: "linear-gradient(135deg, #fff5f5 0%, #ffe4e4 35%, #ffd6d6 70%, #ffffff 100%)"
-    },
-    typography: {
-      fontFamily: "Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Arial",
-      weight: { regular: 400, medium: 500, semibold: 600, bold: 700, extrabold: 800 }
-    },
-    radii: { card: 22, xl: 14, lg: 18 },
-    shadows: { card: "0 10px 30px rgba(16,24,40,.06)" },
-    components: { buttonHeight: 44 }
-  };
+  function pickStr(v){ return (v == null) ? "" : String(v).trim(); }
+  function upper2(v){ return pickStr(v).toUpperCase(); }
+  function safeJSON(txt, fallback){
+    try { return JSON.parse(txt); } catch(e){ return fallback; }
+  }
+  function qs(name){ return new URLSearchParams(location.search).get(name); }
+  function setURLParams(obj){
+    // keep URL clean: only non-empty, sector only if not __ALL__
+    const p = new URLSearchParams(location.search);
+
+    const set = (k,v) => {
+      const s = pickStr(v);
+      if (!s) p.delete(k);
+      else p.set(k, s);
+    };
+
+    set("country", obj.country);
+    set("slug", obj.slug);
+    set("metier", obj.metier);
+
+    if (obj.sector && obj.sector !== "__ALL__") set("sector", obj.sector);
+    else p.delete("sector");
+
+    if (obj.q && pickStr(obj.q).length) set("q", obj.q);
+    else p.delete("q");
+
+    const next = location.pathname + (p.toString() ? "?" + p.toString() : "");
+    history.replaceState({}, "", next);
+  }
+
+  function el(tag, attrs={}, html=""){
+    const n = document.createElement(tag);
+    Object.keys(attrs||{}).forEach(k=>{
+      if (k === "class") n.className = attrs[k];
+      else if (k === "style") n.setAttribute("style", attrs[k]);
+      else if (k.startsWith("data-")) n.setAttribute(k, attrs[k]);
+      else if (k === "text") n.textContent = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    if (html) n.innerHTML = html;
+    return n;
+  }
+
+  function getISOFromUrl(){
+    const raw = qs("country") || qs("iso") || "";
+    const v = upper2(raw);
+    if (!v) return "";
+    if (v.length === 2) return v;
+    return v.slice(0,2);
+  }
+
+  async function fetchJSON(url, init){
+    const res = await fetch(url, init || {});
+    if (!res.ok) {
+      const txt = await res.text().catch(()=> "");
+      throw new Error(`HTTP ${res.status} @ ${url}: ${txt || res.statusText}`);
+    }
+    return await res.json();
+  }
+
+  async function detectGeoISO(){
+    try {
+      const j = await fetchJSON(`${WORKER_URL}/v1/geo`);
+      return upper2(j?.iso || "FR") || "FR";
+    } catch(e){
+      warn("geo failed", e);
+      return "FR";
+    }
+  }
+
+  function countryISO(c){
+    return upper2(c?.iso || c?.code_iso || c?.ISO || c?.countryCode || "");
+  }
+
+  function pickUrl(v){
+    if (!v) return "";
+    if (typeof v === "string") return v.trim();
+    if (typeof v === "object" && v.url) return String(v.url).trim();
+    return "";
+  }
+
+  function pickCountryBanners(countryMeta){
+    const bannersObj = countryMeta?.banners || {};
+    const wide = pickUrl(bannersObj?.image_1);
+    const square = pickUrl(bannersObj?.image_2);
+    return {
+      mode: "fallback",
+      wide,
+      square,
+      click: "#",
+      texte: pickStr(bannersObj?.texte || ""),
+      cta: pickStr(bannersObj?.cta || "")
+    };
+  }
+
+  function pickSponsorBanners(meta){
+    const sp = meta?.sponsor || meta?.meta?.sponsor || meta?.sponsoring || null;
+    if (!sp) return null;
+
+    const wide = pickUrl(sp.logo_2 || sp.logo_wide || sp.wide || sp.bannerWide || sp.image_2);
+    const square = pickUrl(sp.logo_1 || sp.logo_square || sp.square || sp.bannerSquare || sp.image_1);
+    const link = pickStr(sp.link || sp.sponsor_link || sp.url || "");
+    const name = pickStr(sp.name || sp.sponsor_name || "");
+
+    if (!wide && !square) return null;
+
+    return {
+      mode: "sponsor",
+      wide,
+      square,
+      click: link || "#",
+      name
+    };
+  }
 
   // =========================
-  // CSS
+  // CSS (light, matches your global brand)
   // =========================
   function injectCSS(){
     if (document.getElementById("ulydia-metier-css")) return;
-
     const css = `
-      :root{
-        --ul-primary:${TOK.colors.primary};
-        --ul-primaryHover:${TOK.colors.primaryHover};
-        --ul-text:${TOK.colors.text};
-        --ul-muted:${TOK.colors.muted};
-        --ul-border:${TOK.colors.border};
-        --ul-bg:${TOK.colors.bg};
-        --ul-card:${TOK.colors.card};
-        --ul-soft:${TOK.colors.soft};
-        --ul-white:${TOK.colors.white};
-        --ul-radius-card:${TOK.radii.card}px;
-        --ul-radius-xl:${TOK.radii.xl}px;
-        --ul-shadow-card:${TOK.shadows.card};
-        --ul-font:${TOK.typography.fontFamily};
-        --ul-btn-h:${TOK.components.buttonHeight}px;
-      }
+:root{
+  --u-red:#c00102;
+  --u-ink:#0b1220;
+  --u-muted:#6b7280;
+  --u-border:#e6e8ee;
+  --u-card:#ffffff;
+  --u-bg:#ffffff;
+  --u-shadow:0 10px 30px rgba(11,18,32,.08);
+  --u-radius:20px;
+  --u-radius-sm:14px;
+  --u-font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+}
+#ulydia-metier-root{ font-family:var(--u-font); color:var(--u-ink); }
+.u-wrap{ max-width: 1100px; margin: 30px auto; padding: 0 18px 60px; }
+.u-hero{
+  background: radial-gradient(1100px 500px at 15% 0%, rgba(192,1,2,.12), transparent 55%),
+              radial-gradient(900px 450px at 90% 10%, rgba(11,18,32,.10), transparent 55%);
+  border:1px solid var(--u-border);
+  border-radius: var(--u-radius);
+  box-shadow: var(--u-shadow);
+  padding: 22px 22px;
+  margin-bottom: 14px;
+}
+.u-hero h1{ margin:0; font-size: 28px; letter-spacing:-.02em; }
+.u-hero p{ margin:6px 0 0; color:var(--u-muted); }
+.u-card{
+  background: var(--u-card);
+  border:1px solid var(--u-border);
+  border-radius: var(--u-radius);
+  box-shadow: var(--u-shadow);
+  overflow:hidden;
+}
+.u-card-h{ padding:16px 18px; border-bottom:1px solid var(--u-border); display:flex; align-items:center; justify-content:space-between; }
+.u-card-h .t{ font-weight: 700; }
+.u-row{ display:flex; gap:14px; flex-wrap:wrap; padding:16px 18px; align-items:flex-end; }
+.u-field{ flex:1 1 240px; min-width:240px; }
+.u-label{ font-size: 13px; color: var(--u-muted); margin:0 0 6px; }
+.u-select,.u-input{
+  width:100%;
+  border:1px solid var(--u-border);
+  border-radius: 12px;
+  padding: 12px 12px;
+  outline:none;
+  background:#fff;
+  font-size: 15px;
+}
+.u-select:focus,.u-input:focus{ border-color: rgba(192,1,2,.55); box-shadow: 0 0 0 4px rgba(192,1,2,.10); }
+.u-btn{
+  border:0;
+  background: var(--u-red);
+  color:#fff;
+  border-radius: 12px;
+  padding: 12px 18px;
+  font-weight: 700;
+  cursor:pointer;
+  min-width:120px;
+}
+.u-btn:active{ transform: translateY(1px); }
+.u-meta{ padding: 0 18px 14px; color: var(--u-muted); font-size: 13px; }
 
-      #ulydia-metier-root{ font-family:var(--ul-font); color:var(--ul-text); }
-      .ul-wrap{ max-width:1180px; margin:0 auto; padding:24px 16px 80px; }
+.u-content{ margin-top: 16px; }
+.u-title{ font-size: 34px; color: var(--u-red); margin: 0 0 6px; letter-spacing:-.02em; }
+.u-sub{ color: var(--u-muted); font-size: 14px; margin: 0 0 14px; }
 
-      .ul-hero{
-        border-radius: var(--ul-radius-card);
-        border: 1px solid var(--ul-border);
-        background: ${TOK.colors.tint};
-        box-shadow: var(--ul-shadow-card);
-        padding: 18px 18px 14px;
-        display:flex;
-        align-items:flex-start;
-        justify-content:space-between;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-      .ul-h-title{ font-weight:${TOK.typography.weight.extrabold}; font-size:20px; line-height:1.15; }
-      .ul-h-sub{ margin-top:6px; color:var(--ul-muted); font-size:13px; }
+.u-banners{
+  border:1px solid var(--u-border);
+  border-radius: var(--u-radius);
+  box-shadow: var(--u-shadow);
+  background:#fff;
+  padding: 14px;
+  margin: 12px 0 18px;
+}
+.u-bgrid{ display:flex; gap:14px; align-items:stretch; }
+.u-bwide{ flex: 1 1 auto; min-height: 140px; border-radius: var(--u-radius-sm); overflow:hidden; border:1px solid var(--u-border); background:#f7f8fb; }
+.u-bsquare{ width: 240px; min-height: 140px; border-radius: var(--u-radius-sm); overflow:hidden; border:1px solid var(--u-border); background:#f7f8fb; }
+.u-bwide img,.u-bsquare img{ width:100%; height:100%; object-fit:cover; display:block; }
+.u-bnote{ margin-top:10px; color: var(--u-muted); font-size: 13px; display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+.u-pill{ display:inline-flex; gap:8px; align-items:center; border:1px solid var(--u-border); border-radius:999px; padding: 6px 10px; background:#fff; }
+.u-pill b{ color: var(--u-ink); }
 
-      .ul-grid{ margin-top:14px; display:grid; grid-template-columns: 1fr; gap:14px; }
-
-      .ul-card{
-        background: var(--ul-white);
-        border: 1px solid var(--ul-border);
-        border-radius: var(--ul-radius-card);
-        box-shadow: var(--ul-shadow-card);
-        overflow: hidden;
-      }
-      .ul-card-head{
-        padding:14px 16px;
-        border-bottom: 1px solid var(--ul-border);
-        display:flex;
-        align-items:center;
-        justify-content:space-between;
-        gap:10px;
-        flex-wrap: wrap;
-      }
-      .ul-card-title{ font-weight:${TOK.typography.weight.extrabold}; font-size:14px; }
-      .ul-card-body{ padding:16px; }
-
-      .ul-row{ display:flex; gap:10px; flex-wrap:wrap; }
-      .ul-field{ display:flex; flex-direction:column; gap:6px; flex:1; min-width:240px; }
-      .ul-label{ font-size:12px; color:var(--ul-muted); font-weight:${TOK.typography.weight.semibold}; }
-
-      .ul-input, .ul-select{
-        height: var(--ul-btn-h);
-        border-radius: var(--ul-radius-xl);
-        border: 1px solid var(--ul-border);
-        background: #fff;
-        padding: 0 12px;
-        outline:none;
-        font-size:14px;
-      }
-      .ul-input:focus, .ul-select:focus{
-        border-color: rgba(192,1,2,.45);
-        box-shadow: 0 0 0 4px rgba(192,1,2,.08);
-      }
-
-      .ul-actions{ display:flex; gap:10px; align-items:flex-end; }
-      .ul-btn{
-        height: var(--ul-btn-h);
-        padding: 0 14px;
-        border-radius: var(--ul-radius-xl);
-        border: 1px solid var(--ul-border);
-        background: #fff;
-        cursor: pointer;
-        font-weight:${TOK.typography.weight.bold};
-      }
-      .ul-btn.primary{
-        background: var(--ul-primary);
-        border-color: transparent;
-        color: #fff;
-      }
-      .ul-btn.primary:hover{ background: var(--ul-primaryHover); }
-
-      .ul-meta{ color: var(--ul-muted); font-size:12px; }
-      .ul-status{ padding: 10px 16px; color: var(--ul-muted); font-size:13px; }
-
-      .ul-error{
-        margin: 12px 16px 16px;
-        border-radius: 16px;
-        border: 1px solid rgba(192,1,2,.25);
-        background: rgba(192,1,2,.06);
-        padding: 12px;
-      }
-      .ul-error b{ display:block; margin-bottom:6px; }
-
-      /* Autocomplete */
-      .ul-suggest{ position:relative; }
-      .ul-suggest-list{
-        position:absolute;
-        left:0; right:0; top: calc(var(--ul-btn-h) + 6px);
-        border: 1px solid var(--ul-border);
-        border-radius: 14px;
-        background: #fff;
-        box-shadow: var(--ul-shadow-card);
-        z-index: 9999;
-        max-height: 280px;
-        overflow:auto;
-        display:none;
-      }
-      .ul-suggest-item{
-        padding: 10px 12px;
-        cursor:pointer;
-        display:flex;
-        align-items:center;
-        justify-content:space-between;
-        gap:10px;
-      }
-      .ul-suggest-item:hover{ background: rgba(192,1,2,.06); }
-      .ul-suggest-item b{ font-weight:${TOK.typography.weight.bold}; }
-      .ul-suggest-item span{ color: var(--ul-muted); font-size:12px; }
-
-      /* Metier header */
-      .ul-kv{ padding: 16px 16px 10px; }
-      .ul-kv h1{ margin:0; font-size:24px; font-weight:${TOK.typography.weight.extrabold}; }
-      .ul-kv .ul-submeta{ margin-top:6px; color: var(--ul-muted); font-size:13px; display:flex; gap:8px; flex-wrap:wrap; }
-
-      /* Banners */
-      .ul-banners{ padding: 0 16px 16px; display:grid; grid-template-columns: 1fr 260px; gap:12px; }
-      .ul-banner{
-        border: 1px solid var(--ul-border);
-        border-radius: ${TOK.radii.lg}px;
-        overflow:hidden;
-        background: #fff;
-      }
-      .ul-banner a{ display:block; text-decoration:none; }
-      .ul-banner img{ display:block; width:100%; height:100%; object-fit:cover; }
-      .ul-banner-wide{ height: 150px; }
-      .ul-banner-square{ height: 150px; }
-      @media (max-width: 900px){
-        .ul-banners{ grid-template-columns:1fr; }
-        .ul-banner-square{ height: 180px; }
-      }
-
-      /* Rich HTML */
-      .ul-sections{ padding: 0 16px 18px; display:grid; gap:12px; }
-      .ul-section{
-        background: var(--ul-soft);
-        border: 1px solid var(--ul-border);
-        border-radius: ${TOK.radii.lg}px;
-        padding: 14px 14px 12px;
-      }
-      .ul-section h2{
-        margin:0 0 10px;
-        font-size:14px;
-        font-weight:${TOK.typography.weight.extrabold};
-        color: var(--ul-text);
-      }
-      .ul-rich{ color: var(--ul-text); font-size:14px; line-height:1.65; }
-      .ul-rich p{ margin: 0 0 10px; }
-      .ul-rich ul{ margin: 0 0 10px 18px; }
-      .ul-rich li{ margin: 4px 0; }
-      .ul-rich strong{ font-weight:${TOK.typography.weight.bold}; }
-    `;
-
+.u-section{
+  border:1px solid var(--u-border);
+  border-radius: var(--u-radius);
+  box-shadow: var(--u-shadow);
+  background:#fff;
+  padding: 16px 18px;
+  margin: 12px 0;
+}
+.u-section h3{ margin:0 0 10px; font-size: 18px; }
+.u-empty{
+  background: rgba(192,1,2,.06);
+  border:1px solid rgba(192,1,2,.25);
+  color:#5a1314;
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin: 12px 18px 16px;
+}
+.u-empty b{ display:block; margin-bottom:6px; }
+`;
     const style = document.createElement("style");
     style.id = "ulydia-metier-css";
     style.textContent = css;
@@ -249,377 +262,178 @@
   }
 
   // =========================
-  // Helpers
+  // UI shell
   // =========================
-  function pickStr(v){ return (v == null) ? "" : String(v).trim(); }
-  function upper2(v){ return pickStr(v).toUpperCase(); }
-  function safeJSON(t){ try { return JSON.parse(t || "null"); } catch(e){ return null; } }
+  function renderShell(){
+    ROOT.innerHTML = "";
+    const wrap = el("div", { class:"u-wrap" });
 
-  function escapeHTML(s){
-    return String(s||"").replace(/[&<>"']/g, m => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-    }[m]));
+    const hero = el("div", { class:"u-hero" });
+    hero.appendChild(el("h1", { text:"Fiche métier" }));
+    hero.appendChild(el("p", { text:"Choisis un pays, un secteur et un métier — puis charge la fiche dans le contexte du pays (langue & bannières incluses)." }));
+    wrap.appendChild(hero);
+
+    const card = el("div", { class:"u-card" });
+    card.appendChild(el("div", { class:"u-card-h" }, `<div class="t">Recherche</div><div class="u-pill" data-el="catalogStat"><b>catalog</b> —</div>`));
+
+    const row = el("div", { class:"u-row" });
+    row.appendChild(el("div", { class:"u-field" }, `
+      <div class="u-label">Pays</div>
+      <select class="u-select" data-el="country"></select>
+    `));
+    row.appendChild(el("div", { class:"u-field" }, `
+      <div class="u-label">Secteur d’activité</div>
+      <select class="u-select" data-el="sector"></select>
+    `));
+    row.appendChild(el("div", { class:"u-field" }, `
+      <div class="u-label">Rechercher un métier</div>
+      <input class="u-input" data-el="q" placeholder="Tape pour chercher (ex: directeur financier)" list="ulydia-metier-datalist"/>
+      <datalist id="ulydia-metier-datalist"></datalist>
+    `));
+    row.appendChild(el("button", { class:"u-btn", type:"button", "data-el":"loadBtn" }, "Charger"));
+    card.appendChild(row);
+    card.appendChild(el("div", { class:"u-meta", "data-el":"status", text:"Prêt." }));
+
+    wrap.appendChild(card);
+
+    const content = el("div", { class:"u-content" });
+    content.appendChild(el("div", { class:"u-title", "data-el":"name", text:"" }));
+    content.appendChild(el("div", { class:"u-sub", "data-el":"sub", text:"" }));
+
+    const banners = el("div", { class:"u-banners", "data-el":"banners" });
+    banners.appendChild(el("div", { class:"u-bgrid" }, `
+      <a class="u-bwide" data-el="bannerWide" target="_blank" rel="noopener"><img data-el="bannerWideImg" alt=""></a>
+      <a class="u-bsquare" data-el="bannerSquare" target="_blank" rel="noopener"><img data-el="bannerSquareImg" alt=""></a>
+    `));
+    banners.appendChild(el("div", { class:"u-bnote", "data-el":"bannerNote" }, `<span class="u-pill">Pays: <b data-el="iso">—</b> • Langue: <b data-el="lang">—</b> • Bannières: <b data-el="bmode">—</b></span>`));
+    content.appendChild(banners);
+
+    content.appendChild(el("div", { class:"u-section", "data-el":"descSec" }, `<h3>Description</h3><div data-el="desc"></div>`));
+    content.appendChild(el("div", { class:"u-section", "data-el":"missionsSec" }, `<h3>Missions</h3><div data-el="missions"></div>`));
+    content.appendChild(el("div", { class:"u-section", "data-el":"skillsSec" }, `<h3>Compétences</h3><div data-el="skills"></div>`));
+
+    wrap.appendChild(content);
+
+    ROOT.appendChild(wrap);
   }
 
-  function getParam(name){
-    const u = new URL(location.href);
-    return pickStr(u.searchParams.get(name));
-  }
-
-  // ✅ ALWAYS keep simple URL only: metier + country
-  function setSimpleURL({ metier, country }){
-    const u = new URL(location.href);
-    if (metier)  u.searchParams.set("metier", String(metier));
-    if (country) u.searchParams.set("country", String(country));
-    ["slug","sector","q","iso"].forEach(k => u.searchParams.delete(k));
-    history.replaceState({}, "", u.toString());
-  }
-
-  // ✅ Accept ?metier=... or ?slug=...
-  function detectSlug(){
-    const s = getParam("metier") || getParam("slug");
-    if (s) return s;
-
-    const seg = location.pathname.split("/").filter(Boolean);
-    const last = seg[seg.length-1] || "";
-    if (last && last !== "metier" && last !== "fiche-metiers") return last;
-    return "";
-  }
-
-  async function fetchJSON(url, { timeoutMs = 12000 } = {}){
-    const full = url.startsWith("http") ? url : (WORKER_URL + url);
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
-    try{
-      const headers = {
-        "accept": "application/json",
-        "x-proxy-secret": PROXY_SECRET,
-        "x-ulydia-proxy-secret": PROXY_SECRET
-      };
-      const r = await fetch(full, { headers, signal: ctrl.signal, credentials:"omit" });
-      const txt = await r.text();
-      if (!r.ok) throw new Error(`HTTP ${r.status} @ ${url} :: ${txt.slice(0,220)}`);
-      const j = safeJSON(txt);
-      return j;
-    } finally {
-      clearTimeout(t);
-    }
+  function setStatus(msg){
+    const n = ROOT.querySelector('[data-el="status"]');
+    if (n) n.textContent = msg;
   }
 
   // =========================
   // Catalog
   // =========================
   async function loadCatalog(){
-    const r = await fetch(CATALOG_URL, { cache: "no-store" });
-    if (!r.ok) throw new Error("catalog.json load failed");
-    const j = await r.json();
+    const j = await fetchJSON(CATALOG_URL, { cache:"no-store" });
     const countries = Array.isArray(j?.countries) ? j.countries : [];
     const sectors   = Array.isArray(j?.sectors) ? j.sectors : [];
     const metiers   = Array.isArray(j?.metiers) ? j.metiers : [];
     return { countries, sectors, metiers };
   }
 
-  function normalizeLabel(x){
-    return pickStr(x?.label || x?.name || x?.title || x?.slug || "");
+  function fillCountrySelect(sel, countries){
+    sel.innerHTML = "";
+    sel.appendChild(el("option", { value:"", text:"Choisir un pays..." }));
+    countries
+      .slice()
+      .sort((a,b)=> pickStr(a.label).localeCompare(pickStr(b.label)))
+      .forEach(c=>{
+        const iso = countryISO(c);
+        const label = pickStr(c.label || iso);
+        if (!iso) return;
+        sel.appendChild(el("option", { value: iso, text: `${label} (${iso})` }));
+      });
   }
 
-  function sectorId(x){
-    return pickStr(x?.id || x?.slug || x?.value || "").trim();
+  function fillSectorSelect(sel, sectors){
+    sel.innerHTML = "";
+    sel.appendChild(el("option", { value:"__ALL__", text:"Tous les secteurs" }));
+    sectors
+      .slice()
+      .sort((a,b)=> pickStr(a.label).localeCompare(pickStr(b.label)))
+      .forEach(s=>{
+        const slug = pickStr(s.slug || s.id || s.value || "");
+        const label = pickStr(s.label || slug);
+        if (!slug) return;
+        sel.appendChild(el("option", { value: slug, text: label }));
+      });
   }
 
-  function metierSlug(x){
-    return pickStr(x?.slug || x?.id || "").trim();
+  function buildDatalist(dl, metiers, sectorSlug){
+    dl.innerHTML = "";
+    const list = (sectorSlug && sectorSlug !== "__ALL__")
+      ? metiers.filter(m => {
+          const ms = pickStr(m.sector || m.sector_slug || m.secteur || m.secteur_slug || "");
+          return ms === sectorSlug;
+        })
+      : metiers;
+
+    list
+      .slice()
+      .sort((a,b)=> pickStr(a.label || a.name || a.slug).localeCompare(pickStr(b.label || b.name || b.slug)))
+      .slice(0, 500)
+      .forEach(m=>{
+        const slug = pickStr(m.slug || "");
+        const label = pickStr(m.label || m.name || slug);
+        if (!slug) return;
+        const opt = document.createElement("option");
+        opt.value = label;
+        opt.setAttribute("data-slug", slug);
+        dl.appendChild(opt);
+      });
   }
 
-  function findCountry(countries, iso){
-    const needle = upper2(iso);
-    return (countries || []).find(c => upper2(c?.iso) === needle) || null;
-  }
+  function findMetierByQuery(metiers, q){
+    const qq = pickStr(q).toLowerCase();
+    if (!qq) return null;
 
-  // =========================
-  // GEO (fallback only)
-  // =========================
-  async function detectGeoISO(){
-    try{
-      const j = await fetchJSON("/v1/geo", { timeoutMs: 9000 });
-      return upper2(j?.iso || "");
-    } catch(e){
-      return "";
-    }
-  }
+    // try exact label match
+    let hit = metiers.find(m => pickStr(m.label || m.name || "").toLowerCase() === qq);
+    if (hit) return hit;
 
-  // =========================
-  // UI
-  // =========================
-  function renderShell(){
-    ROOT.innerHTML = `
-      <div class="ul-wrap">
-        <div class="ul-hero">
-          <div>
-            <div class="ul-h-title">Fiche métier</div>
-            <div class="ul-h-sub">Choisis un pays, un secteur et un métier — puis charge la fiche dans le contexte du pays (langue & bannières incluses).</div>
-          </div>
-          <div style="display:flex; gap:10px; align-items:center;">
-            <button class="ul-btn" data-action="debug">Debug</button>
-          </div>
-        </div>
+    // try exact slug match
+    hit = metiers.find(m => pickStr(m.slug || "").toLowerCase() === qq);
+    if (hit) return hit;
 
-        <div class="ul-grid">
-          <div class="ul-card">
-            <div class="ul-card-head">
-              <div class="ul-card-title">Recherche</div>
-              <div class="ul-meta" data-el="meta"></div>
-            </div>
-            <div class="ul-card-body">
-              <div class="ul-row">
-                <div class="ul-field">
-                  <div class="ul-label">Pays</div>
-                  <select class="ul-select" data-el="country"></select>
-                </div>
+    // try startswith label
+    hit = metiers.find(m => pickStr(m.label || m.name || "").toLowerCase().startsWith(qq));
+    if (hit) return hit;
 
-                <div class="ul-field">
-                  <div class="ul-label">Secteur d’activité</div>
-                  <select class="ul-select" data-el="sector"></select>
-                </div>
-
-                <div class="ul-field ul-suggest">
-                  <div class="ul-label">Rechercher un métier</div>
-                  <input class="ul-input" data-el="metierSearch" placeholder="Tape pour chercher (ex: directeur financier)..." autocomplete="off"/>
-                  <div class="ul-suggest-list" data-el="suggestList"></div>
-                </div>
-
-                <div class="ul-actions">
-                  <button class="ul-btn primary" data-action="load">Charger</button>
-                </div>
-              </div>
-
-              <div class="ul-status" data-el="status">Chargement du catalogue…</div>
-              <div class="ul-error" data-el="error" style="display:none;"></div>
-            </div>
-          </div>
-
-          <div class="ul-card" data-el="contentCard" style="display:none;">
-            <div class="ul-kv">
-              <h1 data-el="name"></h1>
-              <div class="ul-submeta" data-el="submeta"></div>
-            </div>
-
-            <div class="ul-banners" data-el="banners" style="display:none;">
-              <div class="ul-banner ul-banner-wide">
-                <a class="ul-banner-wide-a" target="_blank" rel="noopener">
-                  <img class="ul-banner-wide-img" alt="">
-                </a>
-              </div>
-              <div class="ul-banner ul-banner-square">
-                <a class="ul-banner-square-a" target="_blank" rel="noopener">
-                  <img class="ul-banner-square-img" alt="">
-                </a>
-              </div>
-            </div>
-
-            <div class="ul-sections" data-el="sections"></div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  function setStatus(txt){
-    const el = ROOT.querySelector('[data-el="status"]');
-    if (el) el.textContent = txt || "";
-  }
-
-  function setMeta(txt){
-    const el = ROOT.querySelector('[data-el="meta"]');
-    if (el) el.textContent = txt || "";
-  }
-
-  function showError(title, msg){
-    const el = ROOT.querySelector('[data-el="error"]');
-    if (!el) return;
-    el.style.display = "";
-    el.innerHTML = `<b>${escapeHTML(title||"Erreur")}</b><div>${escapeHTML(msg||"")}</div>`;
-  }
-  function hideError(){
-    const el = ROOT.querySelector('[data-el="error"]');
-    if (el) el.style.display = "none";
-  }
-
-  // =========================
-  // Suggest / autocomplete
-  // =========================
-  function buildMetierIndex(metiers){
-    return (metiers || []).map(m => ({
-      slug: metierSlug(m),
-      label: normalizeLabel(m),
-      sectors: Array.isArray(m?.sectors) ? m.sectors.map(String) : []
-    })).filter(x => x.slug && x.label);
-  }
-
-  function filterMetiers(index, q, sector){
-    const query = pickStr(q).toLowerCase();
-    const sec = pickStr(sector);
-    let list = index;
-
-    if (sec && sec !== "__ALL__") {
-      list = list.filter(m => (m.sectors || []).includes(sec));
-    }
-    if (!query) return list.slice(0, 20);
-
-    const out = list.filter(m => m.label.toLowerCase().includes(query) || m.slug.toLowerCase().includes(query));
-    return out.slice(0, 20);
-  }
-
-  function showSuggest(listEl, items, onPick){
-    listEl.innerHTML = "";
-    if (!items.length) {
-      listEl.style.display = "none";
-      return;
-    }
-    items.forEach(it => {
-      const div = document.createElement("div");
-      div.className = "ul-suggest-item";
-      div.innerHTML = `<b>${escapeHTML(it.label)}</b><span>${escapeHTML(it.slug)}</span>`;
-      div.addEventListener("click", () => onPick(it));
-      listEl.appendChild(div);
-    });
-    listEl.style.display = "";
-  }
-
-  function hideSuggest(listEl){
-    listEl.style.display = "none";
-  }
-
-  // =========================
-  // Banners (Sponsor vs Country)
-  // =========================
-  function setBanner(anchorEl, imgEl, imgUrl, clickUrl){
-    const a = anchorEl, img = imgEl;
-    if (!imgUrl) {
-      if (a) a.removeAttribute("href");
-      if (img) img.removeAttribute("src");
-      return;
-    }
-    if (img) img.src = imgUrl;
-    if (a) a.href = clickUrl || "#";
-  }
-
-  function pickBannersFromPayload(payload){
-    const meta = payload?.meta || {};
-    const sponsor =
-      meta?.sponsor ||
-      payload?.sponsor ||
-      payload?.meta?.sponsor ||
-      null;
-
-    if (!sponsor) return null;
-
-    const sponsorLink = pickStr(
-      sponsor?.link ||
-      sponsor?.url ||
-      sponsor?.website ||
-      meta?.sponsorLink ||
-      sponsor?.sponsorLink ||
-      ""
-    );
-
-    const wideSponsor = pickStr(
-      sponsor?.logo_2 ||
-      sponsor?.logo2 ||
-      sponsor?.logo_wide ||
-      sponsor?.wide ||
-      sponsor?.banner_wide ||
-      sponsor?.banniere_large ||
-      ""
-    );
-
-    const squareSponsor = pickStr(
-      sponsor?.logo_1 ||
-      sponsor?.logo1 ||
-      sponsor?.logo_square ||
-      sponsor?.square ||
-      sponsor?.banner_square ||
-      sponsor?.banniere_carre ||
-      ""
-    );
-
-    if (wideSponsor || squareSponsor) {
-      return { mode:"sponsor", wide: wideSponsor, square: squareSponsor, click: sponsorLink || "#" };
-    }
     return null;
   }
 
-  function isUrl(s){
-  return typeof s === "string" && /^https?:\/\//i.test(s.trim());
-}
-
-function collectUrlsDeep(obj, out, depth){
-  if (!obj || depth < 0) return out;
-  if (typeof obj === "string") {
-    if (isUrl(obj)) out.push(obj.trim());
-    return out;
-  }
-  if (Array.isArray(obj)) {
-    obj.forEach(x => collectUrlsDeep(x, out, depth - 1));
-    return out;
-  }
-  if (typeof obj === "object") {
-    // webflow image objects often look like { url: "https://..." }
-    if (isUrl(obj.url)) out.push(String(obj.url).trim());
-
-    // scan keys
-    Object.keys(obj).forEach(k => {
-      const v = obj[k];
-      collectUrlsDeep(v, out, depth - 1);
-    });
-  }
-  return out;
-}
-
-function pickCountryBanners(countryMeta){
-  const bannersObj = countryMeta?.banners || {};
-  const wide = pickStr(bannersObj?.image_1 || "");
-  const square = pickStr(bannersObj?.image_2 || "");
-  return {
-    mode: "fallback",
-    wide,
-    square,
-    click: "#",
-    texte: pickStr(bannersObj?.texte || ""),
-    cta: pickStr(bannersObj?.cta || "")
-  };
-}
-
-
-
-
-
-
   // =========================
-  // Render content (HTML sections)
+  // Worker call
   // =========================
-  function addSection(sectionsEl, title, html){
-    const safe = pickStr(html);
-    if (!safe) return;
-    const wrap = document.createElement("div");
-    wrap.className = "ul-section";
-    wrap.innerHTML = `<h2>${escapeHTML(title)}</h2><div class="ul-rich">${safe}</div>`;
-    sectionsEl.appendChild(wrap);
-  };
+  async function fetchMetierPage(slug, iso){
+    const u = `${WORKER_URL}/v1/metier-page?slug=${encodeURIComponent(slug)}&iso=${encodeURIComponent(iso)}`;
+    return await fetchJSON(u, { cache:"no-store" });
+  }
+
+  function setBannerAnchor(a, img, url, click){
+    if (!a || !img) return;
+    const u = pickUrl(url);
+    if (!u) {
+      a.style.display = "none";
+      return;
+    }
+    a.style.display = "";
+    img.src = u;
+    img.alt = "Bannière";
+    a.href = pickStr(click || "#") || "#";
+    if (a.href === "#") a.removeAttribute("target");
+    else a.setAttribute("target","_blank");
+  }
 
   function renderContent(payload, selectedCountryFromCatalog){
-    const card = ROOT.querySelector('[data-el="contentCard"]');
-    card.style.display = "";
-
     const metier = payload?.metier || {};
     const name = pickStr(metier?.name || metier?.title || metier?.label || metier?.slug || "");
     ROOT.querySelector('[data-el="name"]').textContent = name || "—";
 
-    // Country context: prefer Worker payload.pays (most accurate), else catalog
-    // Prefer catalog country (because it contains the non-sponsored banners for sure)
-// and use payload.pays only for langue_finale if needed.
+    // Prefer catalog for fallback banners
     const countryMeta = selectedCountryFromCatalog || payload?.pays || {};
-
     const iso = upper2(countryMeta?.iso || payload?.iso || "");
     const lang = pickStr(
       payload?.pays?.langue_finale ||
@@ -628,262 +442,182 @@ function pickCountryBanners(countryMeta){
       ""
     );
 
+    // Text sections
+    const desc = pickStr(metier?.description || metier?.desc || "");
+    const missions = pickStr(metier?.missions || "");
+    const skills = pickStr(metier?.competences || metier?.skills || "");
 
-    // Sub meta
-    const sub = ROOT.querySelector('[data-el="submeta"]');
-    const sponsorPick = pickBannersFromPayload(payload);
-    const bannerMode = sponsorPick ? "Sponsor" : "Attente (pays)";
-    sub.innerHTML = `
-      <span><b>Pays</b> : ${escapeHTML(iso || "?")}</span>
-      <span>•</span>
-      <span><b>Lang</b> : ${escapeHTML(lang || "?")}</span>
-      <span>•</span>
-      <span><b>Bannières</b> : ${escapeHTML(bannerMode)}</span>
-    `;
+    ROOT.querySelector('[data-el="desc"]').innerHTML = desc || "<div class='u-empty'><b>Champ manquant</b>Description non disponible.</div>";
+    ROOT.querySelector('[data-el="missions"]').innerHTML = missions || "<div class='u-empty'><b>Champ manquant</b>Missions non disponibles.</div>";
+    ROOT.querySelector('[data-el="skills"]').innerHTML = skills || "<div class='u-empty'><b>Champ manquant</b>Compétences non disponibles.</div>";
 
     // Banners
-    const bannersWrap = ROOT.querySelector('[data-el="banners"]');
-    const wideA = ROOT.querySelector(".ul-banner-wide-a");
-    const wideI = ROOT.querySelector(".ul-banner-wide-img");
-    const sqA = ROOT.querySelector(".ul-banner-square-a");
-    const sqI = ROOT.querySelector(".ul-banner-square-img");
-
-    console.log("[metier-page] pays object", countryMeta);
-    console.log("[metier-page] pays.banners", countryMeta?.banners);
-
+    const sponsorPick = pickSponsorBanners(payload?.meta || payload);
     const fallbackPick = pickCountryBanners(countryMeta);
+
     const pick = sponsorPick || fallbackPick;
+    const bWideA = ROOT.querySelector('[data-el="bannerWide"]');
+    const bWideI = ROOT.querySelector('[data-el="bannerWideImg"]');
+    const bSqA   = ROOT.querySelector('[data-el="bannerSquare"]');
+    const bSqI   = ROOT.querySelector('[data-el="bannerSquareImg"]');
 
-    const hasAny = !!(pick?.wide || pick?.square);
-    bannersWrap.style.display = hasAny ? "" : "none";
-    if (hasAny) {
-      setBanner(wideA, wideI, pick.wide, pick.click);
-      setBanner(sqA, sqI, pick.square, pick.click);
-    }
+    setBannerAnchor(bWideA, bWideI, pick?.wide, pick?.click);
+    setBannerAnchor(bSqA, bSqI, pick?.square, pick?.click);
 
-    // Sections: render HTML as-is (from Webflow)
-    const sectionsEl = ROOT.querySelector('[data-el="sections"]');
-    sectionsEl.innerHTML = "";
-
-    // Description can be very long; keep as first section
-    addSection(
-      sectionsEl,
-      "Description",
-      pickStr(metier?.description || metier?.short_description || metier?.resume || "")
-    );
-
-    // Optional fields returned by your worker (seen in payload)
-    addSection(sectionsEl, "Missions", pickStr(metier?.missions || ""));
-    addSection(sectionsEl, "Compétences", pickStr(metier?.competences || metier?.skills || ""));
-    addSection(sectionsEl, "Environnement", pickStr(metier?.environnement || ""));
-    addSection(sectionsEl, "Formation", pickStr(metier?.formation || ""));
-    addSection(sectionsEl, "Salaire", pickStr(metier?.salaire || ""));
+    ROOT.querySelector('[data-el="iso"]').textContent = iso || "—";
+    ROOT.querySelector('[data-el="lang"]').textContent = lang || "—";
+    ROOT.querySelector('[data-el="bmode"]').textContent = (pick?.mode === "sponsor") ? "Sponsor" : "Attente (pays)";
   }
 
   // =========================
-  // Worker payload
-  // =========================
-  async function loadMetierPayload({ slug, iso }){
-    const qs = new URLSearchParams({ slug, iso });
-    return await fetchJSON(`/v1/metier-page?${qs.toString()}`, { timeoutMs: 15000 });
-  }
-
-  // =========================
-  // MAIN
+  // Boot
   // =========================
   async function main(){
     injectCSS();
     renderShell();
-    hideError();
 
     const countrySel = ROOT.querySelector('[data-el="country"]');
-    const sectorSel = ROOT.querySelector('[data-el="sector"]');
-    const searchInput = ROOT.querySelector('[data-el="metierSearch"]');
-    const suggestList = ROOT.querySelector('[data-el="suggestList"]');
+    const sectorSel  = ROOT.querySelector('[data-el="sector"]');
+    const qInput     = ROOT.querySelector('[data-el="q"]');
+    const dl         = document.getElementById("ulydia-metier-datalist");
+    const loadBtn    = ROOT.querySelector('[data-el="loadBtn"]');
+    const stat       = ROOT.querySelector('[data-el="catalogStat"]');
 
-    const slugFromURL = detectSlug();
-    const urlISO = upper2(getParam("country") || getParam("iso") || "");
-    const urlSector = pickStr(getParam("sector") || "");
-    const urlQuery = pickStr(getParam("q") || "");
+    setStatus("Chargement du catalogue…");
 
-    // Load catalog
-    let catalog;
+    let catalog = { countries:[], sectors:[], metiers:[] };
     try {
-      setStatus("Chargement du catalogue…");
       catalog = await loadCatalog();
+      stat.innerHTML = `<b>catalog</b> ${catalog.countries.length} pays • ${catalog.sectors.length} secteurs • ${catalog.metiers.length} métiers`;
     } catch(e){
-      showError("Catalog introuvable", `Impossible de charger catalog.json (${e?.message || e}). Vérifie CATALOG_URL.`);
-      setStatus("Erreur catalogue.");
-      return;
+      warn("catalog failed", e);
+      stat.innerHTML = `<b>catalog</b> indisponible`;
+      setStatus("Erreur: catalog indisponible.");
     }
 
-    const countries = (catalog.countries || []).slice();
-    const sectors = (catalog.sectors || []).slice();
-    const metierIndex = buildMetierIndex(catalog.metiers || []);
+    fillCountrySelect(countrySel, catalog.countries);
+    fillSectorSelect(sectorSel, catalog.sectors);
 
-    setMeta(`catalog: ${countries.length} pays • ${sectors.length} secteurs • ${metierIndex.length} métiers`);
+    // default ISO: URL if valid, else GEO
+    let iso = getISOFromUrl();
+    if (iso && !catalog.countries.some(c => countryISO(c) === iso)) iso = "";
+    if (!iso) iso = await detectGeoISO();
+    if (iso && catalog.countries.some(c => countryISO(c) === iso)) countrySel.value = iso;
 
-    // Default country: URL if valid -> else GEO -> else FR -> else first
-    let selectedISO = "";
-    if (findCountry(countries, urlISO)) selectedISO = urlISO;
+    // sector default
+    const urlSector = pickStr(qs("sector") || "__ALL__") || "__ALL__";
+    if ([...sectorSel.options].some(o => o.value === urlSector)) sectorSel.value = urlSector;
 
-    if (!selectedISO) {
-      const geoISO = await detectGeoISO();
-      if (findCountry(countries, geoISO)) selectedISO = geoISO;
-    }
-    if (!selectedISO && findCountry(countries, "FR")) selectedISO = "FR";
-    if (!selectedISO && countries[0]?.iso) selectedISO = upper2(countries[0].iso);
+    // query default
+    const urlQ = pickStr(qs("q") || "");
+    if (urlQ) qInput.value = urlQ;
 
-    // Populate countries
-    countrySel.innerHTML = "";
-    countries
-      .slice()
-      .sort((a,b) => normalizeLabel(a).localeCompare(normalizeLabel(b), "fr", { sensitivity:"base" }))
-      .forEach(c => {
-        const iso = upper2(c?.iso);
-        const opt = document.createElement("option");
-        opt.value = iso;
-        opt.textContent = `${normalizeLabel(c)}${iso ? ` (${iso})` : ""}`;
-        if (selectedISO && iso === selectedISO) opt.selected = true;
-        countrySel.appendChild(opt);
-      });
-
-    // Populate sectors (+ Tous)
-    sectorSel.innerHTML = "";
-    const allOpt = document.createElement("option");
-    allOpt.value = "__ALL__";
-    allOpt.textContent = "Tous les secteurs";
-    sectorSel.appendChild(allOpt);
-
-    sectors.forEach(s => {
-      const id = sectorId(s);
-      const opt = document.createElement("option");
-      opt.value = id;
-      opt.textContent = normalizeLabel(s) || id;
-      sectorSel.appendChild(opt);
-    });
-
-    if (urlSector) sectorSel.value = urlSector;
-    if (urlQuery) searchInput.value = urlQuery;
-
-    if (!searchInput.value && slugFromURL) {
-      const found = metierIndex.find(m => m.slug === slugFromURL);
-      searchInput.value = found ? found.label : "";
-      searchInput.dataset.slug = slugFromURL;
-    }
-
-    // Suggest behavior
-    function refreshSuggest(){
-      const sector = sectorSel.value;
-      const q = searchInput.value;
-      const items = filterMetiers(metierIndex, q, sector);
-      showSuggest(suggestList, items, (it) => {
-        searchInput.value = it.label;
-        searchInput.dataset.slug = it.slug;
-        hideSuggest(suggestList);
-      });
-    }
-
-    searchInput.addEventListener("input", () => {
-      searchInput.dataset.slug = "";
-      refreshSuggest();
-      // ✅ no URL pollution
-    });
-
-    searchInput.addEventListener("focus", refreshSuggest);
-
-    document.addEventListener("click", (e) => {
-      const box = ROOT.querySelector(".ul-suggest");
-      if (box && !box.contains(e.target)) hideSuggest(suggestList);
-    });
+    buildDatalist(dl, catalog.metiers, sectorSel.value);
 
     sectorSel.addEventListener("change", () => {
-      refreshSuggest();
-      // ✅ no URL pollution
+      buildDatalist(dl, catalog.metiers, sectorSel.value);
+      // keep URL clean; don't force reload
+      setURLParams({
+        country: countrySel.value,
+        sector: sectorSel.value,
+        q: qInput.value,
+        slug: qs("slug") || "",
+        metier: qs("metier") || ""
+      });
     });
 
     countrySel.addEventListener("change", () => {
-      // ✅ keep only country (and keep metier if already selected)
-      const iso = upper2(countrySel.value);
-      const m = pickStr(searchInput.dataset.slug || detectSlug());
-      if (iso && m) setSimpleURL({ metier: m, country: iso });
-      else if (iso) setSimpleURL({ metier: pickStr(getParam("metier") || ""), country: iso });
+      setURLParams({
+        country: countrySel.value,
+        sector: sectorSel.value,
+        q: qInput.value,
+        slug: qs("slug") || "",
+        metier: qs("metier") || ""
+      });
     });
 
-    // Debug button (only UI info — no /v1/filters)
-    ROOT.querySelector('[data-action="debug"]').addEventListener("click", () => {
-      const iso = upper2(countrySel.value);
-      const c = findCountry(countries, iso);
-      console.log("=== METIER PAGE DEBUG ===");
-      console.log("CATALOG_URL", CATALOG_URL);
-      console.log("countries", countries.length, "sectors", sectors.length, "metiers", metierIndex.length);
-      console.log("selected country", iso, c);
-      console.log("selected sector", sectorSel.value);
-      console.log("search", searchInput.value, "picked slug", searchInput.dataset.slug || "");
-      console.log("=========================");
-      alert("Debug envoyé dans la console.");
+    qInput.addEventListener("input", () => {
+      setURLParams({
+        country: countrySel.value,
+        sector: sectorSel.value,
+        q: qInput.value,
+        slug: qs("slug") || "",
+        metier: qs("metier") || ""
+      });
     });
 
-    // Load handler
     async function doLoad(){
-      hideError();
-
-      const iso = upper2(countrySel.value);
-      if (!iso) {
-        showError("Pays manquant", "Sélectionne un pays.");
+      const isoSel = upper2(countrySel.value || "");
+      if (!isoSel) {
+        setStatus("Choisis un pays.");
         return;
       }
 
-      // slug: picked from suggest OR resolve from typed label (exact match)
-      let slug = pickStr(searchInput.dataset.slug || "");
-      if (!slug) {
-        const q = pickStr(searchInput.value).toLowerCase();
-        const cand = metierIndex.find(m => m.label.toLowerCase() === q);
-        if (cand) slug = cand.slug;
+      const q = pickStr(qInput.value || "");
+      let metierHit = findMetierByQuery(catalog.metiers, q);
+
+      // If URL slug/metier exists and q is empty, use it
+      let slug = pickStr(qs("slug") || qs("metier") || "");
+      if (!metierHit && q && !slug) {
+        // try to find by label contains
+        metierHit = catalog.metiers.find(m => pickStr(m.label||m.name||"").toLowerCase().includes(q.toLowerCase()));
       }
+
+      if (!slug && metierHit) slug = pickStr(metierHit.slug || "");
+
       if (!slug) {
-        showError("Métier manquant", "Choisis un métier dans la liste (saisie assistée).");
+        setStatus("Métier manquant — choisis un métier dans la liste (saisie assistée).");
         return;
       }
 
-      // ✅ ALWAYS keep simple URL
-      setSimpleURL({ metier: slug, country: iso });
+      // selected country meta from catalog for fallback banners
+      const selectedCountry = catalog.countries.find(c => countryISO(c) === isoSel) || null;
 
-      // Load from Worker
-      setStatus(`Chargement de la fiche (${slug}) pour ${iso}…`);
-      const selectedCountry = findCountry(countries, iso) || { iso };
+      setURLParams({
+        country: isoSel,
+        sector: sectorSel.value,
+        q,
+        slug,
+        metier: slug
+      });
 
+      setStatus("Chargement de la fiche…");
       try {
-        const payload = await loadMetierPayload({ slug, iso });
-        if (DEBUG) log("payload", payload);
+        const payload = await fetchMetierPage(slug, isoSel);
+        log("payload", payload);
         renderContent(payload, selectedCountry);
         setStatus("OK.");
       } catch(e){
-        showError("Erreur Worker", e?.message || String(e));
+        warn("worker error", e);
+        const msg = pickStr(e?.message || e);
         setStatus("Erreur.");
+        // show error in Description
+        ROOT.querySelector('[data-el="desc"]').innerHTML = `<div class="u-empty"><b>Erreur Worker</b>${msg}</div>`;
+        ROOT.querySelector('[data-el="missions"]').innerHTML = "";
+        ROOT.querySelector('[data-el="skills"]').innerHTML = "";
+        // hide banners
+        const bWideA = ROOT.querySelector('[data-el="bannerWide"]');
+        const bSqA   = ROOT.querySelector('[data-el="bannerSquare"]');
+        if (bWideA) bWideA.style.display = "none";
+        if (bSqA) bSqA.style.display = "none";
       }
     }
 
-    ROOT.querySelector('[data-action="load"]').addEventListener("click", doLoad);
+    loadBtn.addEventListener("click", doLoad);
 
-    setStatus("Prêt.");
-
-    // Auto-load if URL already has metier/slug + country
-    if (slugFromURL && selectedISO) {
-      if (!searchInput.dataset.slug) searchInput.dataset.slug = slugFromURL;
-      // ensure URL is normalized simple
-      setSimpleURL({ metier: slugFromURL, country: selectedISO });
-      doLoad();
+    // auto-load if URL contains slug/metier
+    const autoSlug = pickStr(qs("slug") || qs("metier") || "");
+    if (autoSlug) {
+      // set q input to nice label if possible
+      const m = catalog.metiers.find(x => pickStr(x.slug||"") === autoSlug);
+      if (m && !qInput.value) qInput.value = pickStr(m.label || m.name || autoSlug);
+      await doLoad();
+    } else {
+      setStatus("Prêt.");
     }
   }
 
   main().catch((e) => {
     console.error("[metier-page] fatal", e);
-    try {
-      const el = ROOT.querySelector('[data-el="error"]');
-      el.style.display = "";
-      el.innerHTML = `<b>Fatal</b><div>${escapeHTML(e?.message || String(e))}</div>`;
-    } catch(_) {}
   });
-
 })();
