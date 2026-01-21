@@ -1,4 +1,4 @@
-/* metier-page.js — Ulydia (V6.0)
+/* metier-page.js — Ulydia (V6.1)
    ✅ Single shell page /metier (filters + job profile)
    ✅ Order: COUNTRY → SECTOR → JOB
    ✅ Preselect from URL: /metier?metier=SLUG&country=FR
@@ -8,11 +8,11 @@
    ✅ Blocky modern design (cards, gradients, subtle “wow”)
 */
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V60__) return;
-  window.__ULYDIA_METIER_PAGE_V60__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V61__) return;
+  window.__ULYDIA_METIER_PAGE_V61__ = true;
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
-  const log = (...a) => DEBUG && console.log("[metier-page.v6.0]", ...a);
+  const log = (...a) => DEBUG && console.log("[metier-page.v6.1]", ...a);
 
   // =========================================================
   // CONFIG (from global or fallback)
@@ -197,12 +197,50 @@
   // ---------------------------------------------------------
   function normCountry(c){
     if (!c || typeof c !== "object") return null;
-    const iso = safeText(c.iso || c.code || c.country || c.alpha2).trim().toUpperCase();
-    const name = safeText(c.name || c.pays || c.title || iso).trim();
-    const lang = safeText(c.langue_finale || c.lang || c.language || "").trim().toLowerCase();
-    const wide = safeText(c.banner_wide || c.bannerWide || c.banner1 || (c.banners && c.banners.wide) || "").trim();
-    const square = safeText(c.banner_square || c.bannerSquare || c.banner2 || (c.banners && c.banners.square) || "").trim();
-    return { iso, name, lang, banners: { wide, square }, raw: c };
+
+    const iso = safeText(c.iso || c.code || c.country || c.alpha2 || c.ISO || c.iso2).trim().toUpperCase();
+    const name = safeText(c.name || c.pays || c.title || c.nom || iso).trim();
+    const lang = safeText(
+      c.langue_finale || c.lang || c.language || c.langue || c.lang_finale || ""
+    ).trim().toLowerCase();
+
+    // Bannières "attente sponsorisation" (noms variables selon Webflow/Airtable)
+    const wide = safeText(
+      c.banner_wide ||
+      c.bannerWide ||
+      c.banner1 ||
+      c.banniere_wide ||
+      c.banniereWide ||
+      c.banniere_1 ||
+      c.banniere_attente_sponsorisation_wide ||
+      c.banniere_attente_sponsorisation ||
+      c.attente_sponsorisation_wide ||
+      c.attente_sponsorisation ||
+      c.banner_attente_sponsorisation_wide ||
+      c.banner_attente_sponsorisation ||
+      (c.banners && (c.banners.wide || c.banners.banner_wide)) ||
+      ""
+    ).trim();
+
+    const square = safeText(
+      c.banner_square ||
+      c.bannerSquare ||
+      c.banner2 ||
+      c.banniere_square ||
+      c.banniereSquare ||
+      c.banniere_2 ||
+      c.banniere_attente_sponsorisation_square ||
+      c.attente_sponsorisation_square ||
+      c.banner_attente_sponsorisation_square ||
+      (c.banners && (c.banners.square || c.banners.banner_square)) ||
+      ""
+    ).trim();
+
+    // Fallbacks: si un seul format est fourni, on le réutilise
+    const wide2 = wide || square || "";
+    const square2 = square || wide || "";
+
+    return { iso, name, lang, banners: { wide: wide2, square: square2 }, raw: c };
   }
 
   function normSector(s){
@@ -262,7 +300,7 @@
   // Design (CSS) — inspired by your propal HTML
   // ---------------------------------------------------------
   function injectCSS(){
-    if (document.getElementById("ulydia-metier-css-v6")) return;
+    if (document.getElementById("ulydia-metier-css-v61")) return;
 
     const css = `
 :root{
@@ -557,10 +595,159 @@
   color: rgba(15,23,42,.70);
   font-weight: 700;
 }
+
+/* Sticky filter bar */
+.ul-sticky{
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(255,255,255,.92);
+  backdrop-filter: blur(var(--u-blur));
+  border-bottom: 1px solid rgba(15,23,42,.10);
+  box-shadow: 0 10px 22px rgba(15,23,42,.06);
+}
+.ul-filters{
+  display:grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: 14px;
+  padding: 16px 0 10px;
+}
+@media (max-width: 980px){
+  .ul-filters{ grid-template-columns: 1fr; }
+}
+.ul-field label{
+  display:block;
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(15,23,42,.82);
+  margin: 0 0 8px;
+}
+.ul-control{
+  width: 100%;
+  height: 46px;
+  border-radius: 14px;
+  border: 1px solid rgba(15,23,42,.14);
+  background: white;
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 700;
+  outline: none;
+}
+.ul-control:focus{
+  border-color: rgba(192,1,2,.55);
+  box-shadow: 0 0 0 4px rgba(192,1,2,.10);
+}
+
+/* Suggestions */
+#ulJobSuggest{
+  position: relative;
+}
+.ul-suggest{
+  position: absolute;
+  top: 8px;
+  left: 0;
+  right: 0;
+  border-radius: 14px;
+  border: 1px solid rgba(15,23,42,.12);
+  background: rgba(255,255,255,.96);
+  backdrop-filter: blur(var(--u-blur));
+  box-shadow: 0 20px 40px rgba(15,23,42,.14);
+  overflow: hidden;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.ul-suggest button{
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  display:flex;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 750;
+}
+.ul-suggest button:hover{
+  background: rgba(37,99,235,.08);
+}
+
+/* Header */
+.ul-header{
+  margin-top: 18px;
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(255,255,255,.88);
+  border: 1px solid rgba(15,23,42,.10);
+  box-shadow: var(--u-shadow-soft);
+  display:flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+@media (max-width: 980px){
+  .ul-header{ flex-direction: column; }
+}
+.ul-header-icon{
+  width: 72px;
+  height: 72px;
+  border-radius: 22px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background: linear-gradient(135deg, rgba(37,99,235,1), rgba(192,1,2,1));
+  flex: 0 0 auto;
+}
+.ul-header-body{ flex: 1 1 auto; min-width: 0; }
+.ul-header-actions{
+  display:flex;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+@media (max-width: 980px){
+  .ul-header-actions{ width: 100%; }
+  .ul-header-actions a{ flex: 1 1 0; justify-content: center; }
+}
+.ul-title{
+  margin: 10px 0 6px;
+  font-size: 42px;
+  letter-spacing: -0.03em;
+}
+@media (max-width: 980px){
+  .ul-title{ font-size: 34px; }
+}
+.ul-sub{
+  margin: 0;
+  color: rgba(15,23,42,.65);
+  font-weight: 650;
+}
+
+/* Wide banner placement */
+.ul-banner-wide-wrap{
+  display:flex;
+  justify-content:center;
+  margin-top: 16px;
+}
+.ul-banner-wide{
+  width: 720px;
+  max-width: 100%;
+  height: 128px;
+}
+
+/* Layout row */
+.ul-row{
+  display:grid;
+  grid-template-columns: 1.9fr 1fr;
+  gap: 18px;
+  align-items: start;
+  margin-top: 18px;
+}
+@media (max-width: 980px){
+  .ul-row{ grid-template-columns: 1fr; }
+}
 `;
 
     const style = document.createElement("style");
-    style.id = "ulydia-metier-css-v6";
+    style.id = "ulydia-metier-css-v61";
     style.textContent = css;
     document.head.appendChild(style);
   }
@@ -582,20 +769,14 @@
   }
 
   function renderShell(root){
+    // Layout inspiré du HTML "propal1" : barre de filtres sticky au-dessus, puis header métier, puis contenu + sidebar.
     root.innerHTML = `
 <div class="ul-wrap">
-  <div class="ul-container">
-    <div class="ul-hero">
-      <h1>Fiche métier</h1>
-      <p>Sélectionne un pays → un secteur → un métier. Les bannières (sponsor/non-sponsor) sont prêtes pour la sponsorisation.</p>
-    </div>
-  </div>
-
   <div class="ul-sticky">
     <div class="ul-container">
       <div class="ul-filters">
         <div class="ul-field">
-          <label>🌍 Pays</label>
+          <label>🌍 Pays / Région</label>
           <select class="ul-control" id="ulCountry"></select>
         </div>
         <div class="ul-field">
@@ -603,41 +784,57 @@
           <select class="ul-control" id="ulSector"></select>
         </div>
         <div class="ul-field">
-          <label>🔍 Métier</label>
-          <input class="ul-control" id="ulJob" placeholder="Tape pour chercher un métier…" autocomplete="off" />
+          <label>🔍 Rechercher un métier</label>
+          <input class="ul-control" id="ulJob" placeholder="Ex: Directeur financier, Comptable…" autocomplete="off" />
           <div id="ulJobSuggest" style="position:relative;"></div>
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding: 0 0 14px;">
+        <button class="ul-btn" id="ulResetBtn" type="button">Réinitialiser</button>
+        <div style="font-size:12px; color: rgba(15,23,42,.65); font-weight: 800;">
+          <span id="ulResultCount">—</span> fiche(s) métier
         </div>
       </div>
     </div>
   </div>
 
   <div class="ul-container">
-    <div class="ul-row">
-      <div class="ul-card" id="ulMainCard">
-        <div class="ul-card-head">
-          <span class="ul-badge">💼 Ulydia</span>
-          <div style="display:flex; gap:10px; align-items:center;">
-            <a class="ul-btn" id="ulShareBtn" href="#" target="_blank" rel="noopener noreferrer">Copier le lien</a>
-            <a class="ul-btn ul-btn-primary" id="ulSponsorBtn" href="#" target="_blank" rel="noopener noreferrer">Sponsoriser</a>
-          </div>
-        </div>
+    <header class="ul-header">
+      <div class="ul-header-icon" aria-hidden="true">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+          <polyline points="16 18 22 12 16 6"></polyline>
+          <polyline points="8 6 2 12 8 18"></polyline>
+        </svg>
+      </div>
+      <div class="ul-header-body">
+        <span class="ul-badge">💼 Fiche métier</span>
+        <h1 class="ul-title" id="ulJobTitle">Choisis un métier</h1>
+        <p class="ul-sub" id="ulJobSub">Sélectionne un pays → un secteur → un métier.</p>
 
-        <div id="ulHeader" class="ul-section">
-          <h2 class="ul-title" id="ulJobTitle">Choisis un métier</h2>
-          <p class="ul-sub" id="ulJobSub">Puis la fiche complète s’affichera ici (avec les bannières sponsor/non-sponsor).</p>
-
+        <!-- Banner wide (sponsor OU attente sponsorisation) -->
+        <div class="ul-banner-wide-wrap">
           <a class="ul-banner-wide" id="ulBannerWide" href="#" target="_blank" rel="noopener noreferrer" style="display:none;">
             <img id="ulBannerWideImg" alt="Ulydia banner wide"/>
             <div class="ul-banner-pill" id="ulBannerWidePill">Sponsor</div>
           </a>
         </div>
+      </div>
 
+      <div class="ul-header-actions">
+        <a class="ul-btn" id="ulShareBtn" href="#" target="_blank" rel="noopener noreferrer">Copier le lien</a>
+        <a class="ul-btn ul-btn-primary" id="ulSponsorBtn" href="#" target="_blank" rel="noopener noreferrer">Sponsoriser</a>
+      </div>
+    </header>
+
+    <div class="ul-row">
+      <div class="ul-card" id="ulMainCard">
         <div id="ulContent" class="ul-section">
           <div class="ul-empty">Sélectionne un pays, puis un secteur, puis un métier.</div>
         </div>
       </div>
 
-      <div class="ul-card ul-sidebar" id="ulSideCard">
+      <aside class="ul-card ul-sidebar" id="ulSideCard">
         <div class="ul-side-inner">
           <a class="ul-banner-square" id="ulBannerSquare" href="#" target="_blank" rel="noopener noreferrer" style="display:none;">
             <img id="ulBannerSquareImg" alt="Ulydia banner square"/>
@@ -665,8 +862,7 @@
             </div>
           </div>
         </div>
-      </div>
-
+      </aside>
     </div>
   </div>
 </div>`;
@@ -680,6 +876,7 @@
     if (!items.length) return;
 
     const box = document.createElement("div");
+    box.className = "ul-suggest";
     box.style.position = "absolute";
     box.style.left = "0";
     box.style.right = "0";
@@ -810,6 +1007,9 @@
     const elJob     = qs("#ulJob", root);
     const elSuggest = qs("#ulJobSuggest", root);
 
+    const elResetBtn = qs("#ulResetBtn", root);
+    const elResultCount = qs("#ulResultCount", root);
+
     const elTitle   = qs("#ulJobTitle", root);
     const elSub     = qs("#ulJobSub", root);
     const elContent = qs("#ulContent", root);
@@ -862,6 +1062,7 @@
       const fromUrl = safeText(getURLParams().sector).trim();
       if (fromUrl) elSector.value = fromUrl;
       else elSector.value = "";
+      updateCount();
     }
 
     // Jobs pool based on selected sector + language
@@ -888,7 +1089,14 @@
       return list;
     }
 
-    function updateSidebar(){
+    
+    function updateCount(){
+      if (!elResultCount) return;
+      const pool = jobsForSelection();
+      elResultCount.textContent = String(pool.length || 0);
+    }
+
+function updateSidebar(){
       const c = currentCountry();
       elSideCountry.textContent = c ? `${c.name} (${c.iso})` : "—";
       elSideSector.textContent = elSector.value ? (elSector.selectedOptions[0]?.textContent || elSector.value) : "—";
@@ -925,36 +1133,39 @@
       const lang = pickLangForCountry(countryObj);
 
       // Sponsor decision
-      const sponsor = worker?.sponsor || worker?.meta?.sponsor || null;
+      const sponsor = worker?.sponsor || worker?.meta?.sponsor || worker?.sponsoring || null;
+      const sponsorName = safeText(sponsor?.name || sponsor?.nom || sponsor?.company || sponsor?.brand || "").trim();
       const sponsorLink = safeText(sponsor?.link || sponsor?.url || sponsor?.website || "").trim();
-      const sponsorWide = safeText(sponsor?.logo_2 || sponsor?.logo_wide || sponsor?.wide || "").trim();
-      const sponsorSquare = safeText(sponsor?.logo_1 || sponsor?.logo_square || sponsor?.square || "").trim();
+      const sponsorWide = safeText(sponsor?.logo_2 || sponsor?.logo_wide || sponsor?.wide || sponsor?.banner_wide || "").trim();
+      const sponsorSquare = safeText(sponsor?.logo_1 || sponsor?.logo_square || sponsor?.square || sponsor?.banner_square || "").trim();
 
       const fallbackWide = safeText(countryObj?.banners?.wide || "").trim();
       const fallbackSquare = safeText(countryObj?.banners?.square || "").trim();
 
-      const isSponsored = !!(sponsorLink && (sponsorWide || sponsorSquare));
+      // On considère "sponsorisé" si on a AU MOINS une créa (wide ou square).
+      // Le lien sponsor peut être absent (dans ce cas, clic -> page Sponsor).
+      const hasSponsorCreative = !!(sponsorWide || sponsorSquare);
       const sponsorCTA = new URL(location.origin + SPONSOR_PATH);
       sponsorCTA.searchParams.set("metier", slug);
       sponsorCTA.searchParams.set("country", iso);
 
-      // Banner links: sponsor link if sponsored, else sponsor page
-      const clickUrl = isSponsored ? sponsorLink : sponsorCTA.toString();
+      const clickUrl = (hasSponsorCreative && sponsorLink) ? sponsorLink : sponsorCTA.toString();
       elSponsorBtn.href = sponsorCTA.toString();
 
       // Wide banner
-      const wideUrl = isSponsored ? (sponsorWide || sponsorSquare) : fallbackWide;
+
+      const wideUrl = hasSponsorCreative ? (sponsorWide || sponsorSquare) : fallbackWide;
       if (wideUrl) {
         elWideImg.src = wideUrl;
         elWideA.href = clickUrl;
-        elWidePill.textContent = isSponsored ? "Sponsor" : "Sponsoriser ce métier";
+        elWidePill.textContent = hasSponsorCreative ? (sponsorName ? `Sponsor — ${sponsorName}` : "Sponsor") : "Sponsoriser ce métier";
         elWideA.style.display = "block";
       } else {
         elWideA.style.display = "none";
       }
 
       // Square banner
-      const sqUrl = isSponsored ? (sponsorSquare || sponsorWide) : fallbackSquare;
+      const sqUrl = hasSponsorCreative ? (sponsorSquare || sponsorWide) : fallbackSquare;
       if (sqUrl) {
         elSqImg.src = sqUrl;
         elSqA.href = clickUrl;
@@ -1047,6 +1258,27 @@
     // Build sectors now
     buildSectors();
 
+// Reset
+    if (elResetBtn) {
+      elResetBtn.addEventListener("click", async () => {
+        // back to visitor default country (or first country)
+        const defIso = (pickCountry(countries, visitorISO) ? visitorISO : (countries[0]?.iso || "FR"));
+        elCountry.value = defIso;
+        buildSectors();
+        elJob.value = "";
+        elSuggest.innerHTML = "";
+        setURLParams({ metier: "", sector: "", country: defIso }, { replace: false });
+        elTitle.textContent = "Choisis un métier";
+        elSub.textContent = "Sélectionne un pays → un secteur → un métier.";
+        elContent.innerHTML = `<div class="ul-empty">Sélectionne un pays, puis un secteur, puis un métier.</div>`;
+        // hide banners
+        qs("#ulBannerWide", root).style.display = "none";
+        qs("#ulBannerSquare", root).style.display = "none";
+        updateCount();
+        updateSidebar();
+      });
+    }
+
     // Initial selection (URL metier)
     const startMetier = safeText(url0.metier).trim();
     if (startMetier) {
@@ -1056,6 +1288,7 @@
       setURLParams({ metier: startMetier, country: elCountry.value }, { replace: true });
       await renderMetier(startMetier);
     } else {
+      updateCount();
       updateSidebar();
     }
 
@@ -1076,6 +1309,7 @@
     elSector.addEventListener("change", () => {
       // clear job input to encourage next step
       elJob.value = "";
+      updateCount();
       updateSidebar();
     });
 
@@ -1112,6 +1346,6 @@
   }
 
   main().catch((e) => {
-    console.error("[metier-page.v6.0] fatal", e);
+    console.error("[metier-page.v6.1] fatal", e);
   });
 })();
