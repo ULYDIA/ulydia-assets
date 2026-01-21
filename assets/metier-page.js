@@ -1,16 +1,19 @@
-/* metier-page.js — Ulydia (v10.1)
-   - Static catalog.json (countries + sectors + metiers)
+/* metier-page.js — Ulydia (v10.2)
+   - Loads a static catalog.json (countries + sectors + metiers)
    - Filters: country / sector / metier autocomplete
    - Calls Worker: GET /v1/metier-page?slug=...&iso=FR
-   - Banners: sponsor if present else country attente banners from catalog
-   - URL handling:
+   - Banners:
+       * Sponsor if present (payload.meta.sponsor.*)
+       * Else fallback to country banners (payload.pays.banners first, then catalog country banners)
+   - URL:
+       * ALWAYS keep simple URL: ?metier=...&country=...
        * Accepts ?metier=... as alias of ?slug=...
-       * "Simple URL mode": if landing URL is only metier+country, DO NOT add slug/sector/q automatically
+   - Design: improved layout + renders HTML fields with innerHTML
 */
 
 (() => {
-  if (window.__ULYDIA_METIER_PAGE_V101__) return;
-  window.__ULYDIA_METIER_PAGE_V101__ = true;
+  if (window.__ULYDIA_METIER_PAGE_V102__) return;
+  window.__ULYDIA_METIER_PAGE_V102__ = true;
 
   // =========================
   // CONFIG
@@ -18,7 +21,8 @@
   const WORKER_URL   = "https://ulydia-business.contact-871.workers.dev";
   const PROXY_SECRET = "ulydia_2026_proxy_Y4b364u2wsFsQL";
 
-  // ✅ Set exact URL (bump ?v=... when you update catalog.json)
+  // ✅ Catalog JSON hosted on Cloudflare Pages
+  // Example: https://ulydia-assets.pages.dev/assets/catalog.json?v=5
   const CATALOG_URL  = "https://ulydia-assets.pages.dev/assets/catalog.json?v=5";
 
   const DEBUG = !!window.__METIER_PAGE_DEBUG__;
@@ -35,32 +39,27 @@
   }
 
   // =========================
-  // Design tokens (v2)
+  // Design tokens (v2-ish)
   // =========================
   const TOK = {
     colors: {
       primary: "#c00102",
       primaryHover: "#a00001",
-      text: "#1a1a1a",
-      muted: "#6b7280",
-      border: "#e5e7eb",
+      text: "#101828",
+      muted: "#667085",
+      border: "#eaecf0",
       bg: "#ffffff",
-      card: "#fafafa",
-      white: "#ffffff"
+      card: "#ffffff",
+      soft: "#f9fafb",
+      white: "#ffffff",
+      tint: "linear-gradient(135deg, #fff5f5 0%, #ffe4e4 35%, #ffd6d6 70%, #ffffff 100%)"
     },
     typography: {
       fontFamily: "Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Arial",
-      basePx: 14,
       weight: { regular: 400, medium: 500, semibold: 600, bold: 700, extrabold: 800 }
     },
-    radii: { sm: 6, md: 8, lg: 10, xl: 12, card: 22 },
-    shadows: {
-      card: "0 10px 30px rgba(0,0,0,.06)",
-      cardHover: "0 15px 40px rgba(0,0,0,.10)"
-    },
-    gradients: {
-      redSlow: "linear-gradient(135deg, #fff5f5 0%, #ffe4e4 35%, #ffd6d6 70%, #ffffff 100%)"
-    },
+    radii: { card: 22, xl: 14, lg: 18 },
+    shadows: { card: "0 10px 30px rgba(16,24,40,.06)" },
     components: { buttonHeight: 44 }
   };
 
@@ -69,6 +68,7 @@
   // =========================
   function injectCSS(){
     if (document.getElementById("ulydia-metier-css")) return;
+
     const css = `
       :root{
         --ul-primary:${TOK.colors.primary};
@@ -78,21 +78,22 @@
         --ul-border:${TOK.colors.border};
         --ul-bg:${TOK.colors.bg};
         --ul-card:${TOK.colors.card};
+        --ul-soft:${TOK.colors.soft};
         --ul-white:${TOK.colors.white};
         --ul-radius-card:${TOK.radii.card}px;
         --ul-radius-xl:${TOK.radii.xl}px;
-        --ul-radius-md:${TOK.radii.md}px;
         --ul-shadow-card:${TOK.shadows.card};
         --ul-font:${TOK.typography.fontFamily};
         --ul-btn-h:${TOK.components.buttonHeight}px;
       }
 
       #ulydia-metier-root{ font-family:var(--ul-font); color:var(--ul-text); }
-      .ul-wrap{ max-width:1180px; margin:0 auto; padding:26px 16px 80px; }
+      .ul-wrap{ max-width:1180px; margin:0 auto; padding:24px 16px 80px; }
+
       .ul-hero{
         border-radius: var(--ul-radius-card);
         border: 1px solid var(--ul-border);
-        background: ${TOK.gradients.redSlow};
+        background: ${TOK.colors.tint};
         box-shadow: var(--ul-shadow-card);
         padding: 18px 18px 14px;
         display:flex;
@@ -104,7 +105,8 @@
       .ul-h-title{ font-weight:${TOK.typography.weight.extrabold}; font-size:20px; line-height:1.15; }
       .ul-h-sub{ margin-top:6px; color:var(--ul-muted); font-size:13px; }
 
-      .ul-grid{ margin-top:16px; display:grid; grid-template-columns: 1fr; gap:14px; }
+      .ul-grid{ margin-top:14px; display:grid; grid-template-columns: 1fr; gap:14px; }
+
       .ul-card{
         background: var(--ul-white);
         border: 1px solid var(--ul-border);
@@ -159,7 +161,19 @@
       }
       .ul-btn.primary:hover{ background: var(--ul-primaryHover); }
 
-      /* Autocomplete dropdown */
+      .ul-meta{ color: var(--ul-muted); font-size:12px; }
+      .ul-status{ padding: 10px 16px; color: var(--ul-muted); font-size:13px; }
+
+      .ul-error{
+        margin: 12px 16px 16px;
+        border-radius: 16px;
+        border: 1px solid rgba(192,1,2,.25);
+        background: rgba(192,1,2,.06);
+        padding: 12px;
+      }
+      .ul-error b{ display:block; margin-bottom:6px; }
+
+      /* Autocomplete */
       .ul-suggest{ position:relative; }
       .ul-suggest-list{
         position:absolute;
@@ -185,40 +199,49 @@
       .ul-suggest-item b{ font-weight:${TOK.typography.weight.bold}; }
       .ul-suggest-item span{ color: var(--ul-muted); font-size:12px; }
 
-      /* Content */
-      .ul-kv{ padding: 14px 16px 6px; }
-      .ul-kv h1{ margin:0; font-size:22px; font-weight:${TOK.typography.weight.extrabold}; }
-      .ul-kv p{ margin:8px 0 0; color: var(--ul-muted); line-height:1.5; }
+      /* Metier header */
+      .ul-kv{ padding: 16px 16px 10px; }
+      .ul-kv h1{ margin:0; font-size:24px; font-weight:${TOK.typography.weight.extrabold}; }
+      .ul-kv .ul-submeta{ margin-top:6px; color: var(--ul-muted); font-size:13px; display:flex; gap:8px; flex-wrap:wrap; }
 
-      .ul-banners{ padding: 12px 16px 16px; display:grid; grid-template-columns: 1fr 240px; gap:12px; }
+      /* Banners */
+      .ul-banners{ padding: 0 16px 16px; display:grid; grid-template-columns: 1fr 260px; gap:12px; }
       .ul-banner{
         border: 1px solid var(--ul-border);
-        border-radius: 18px;
+        border-radius: ${TOK.radii.lg}px;
         overflow:hidden;
         background: #fff;
       }
       .ul-banner a{ display:block; text-decoration:none; }
       .ul-banner img{ display:block; width:100%; height:100%; object-fit:cover; }
-      .ul-banner-wide{ height: 130px; }
-      .ul-banner-square{ height: 130px; }
-
-      @media (max-width: 860px){
+      .ul-banner-wide{ height: 150px; }
+      .ul-banner-square{ height: 150px; }
+      @media (max-width: 900px){
         .ul-banners{ grid-template-columns:1fr; }
-        .ul-banner-square{ height: 160px; }
+        .ul-banner-square{ height: 180px; }
       }
 
-      .ul-meta{ padding: 0 16px 14px; color: var(--ul-muted); font-size:12px; }
-      .ul-status{ padding: 10px 16px; color: var(--ul-muted); font-size:13px; }
-
-      .ul-error{
-        margin: 12px 16px 16px;
-        border-radius: 16px;
-        border: 1px solid rgba(192,1,2,.25);
-        background: rgba(192,1,2,.06);
-        padding: 12px;
+      /* Rich HTML */
+      .ul-sections{ padding: 0 16px 18px; display:grid; gap:12px; }
+      .ul-section{
+        background: var(--ul-soft);
+        border: 1px solid var(--ul-border);
+        border-radius: ${TOK.radii.lg}px;
+        padding: 14px 14px 12px;
       }
-      .ul-error b{ display:block; margin-bottom:6px; }
+      .ul-section h2{
+        margin:0 0 10px;
+        font-size:14px;
+        font-weight:${TOK.typography.weight.extrabold};
+        color: var(--ul-text);
+      }
+      .ul-rich{ color: var(--ul-text); font-size:14px; line-height:1.65; }
+      .ul-rich p{ margin: 0 0 10px; }
+      .ul-rich ul{ margin: 0 0 10px 18px; }
+      .ul-rich li{ margin: 4px 0; }
+      .ul-rich strong{ font-weight:${TOK.typography.weight.bold}; }
     `;
+
     const style = document.createElement("style");
     style.id = "ulydia-metier-css";
     style.textContent = css;
@@ -232,42 +255,27 @@
   function upper2(v){ return pickStr(v).toUpperCase(); }
   function safeJSON(t){ try { return JSON.parse(t || "null"); } catch(e){ return null; } }
 
+  function escapeHTML(s){
+    return String(s||"").replace(/[&<>"']/g, m => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[m]));
+  }
+
   function getParam(name){
     const u = new URL(location.href);
     return pickStr(u.searchParams.get(name));
   }
 
-  // ✅ "Rich" URL updater (kept for non-simple mode)
-  function setURLParams(params){
-    const u = new URL(location.href);
-    Object.keys(params || {}).forEach(k => {
-      const v = params[k];
-      if (v == null || v === "") u.searchParams.delete(k);
-      else u.searchParams.set(k, String(v));
-    });
-    history.replaceState({}, "", u.toString());
-  }
-
-  // ✅ Simple URL mode helpers
-  function isSimpleURLMode(){
-    const u = new URL(location.href);
-    const hasMetier = !!u.searchParams.get("metier");
-    const hasSlug   = !!u.searchParams.get("slug");
-    const hasSector = !!u.searchParams.get("sector");
-    const hasQ      = !!u.searchParams.get("q");
-    // Simple = arrives with metier (and usually country) and no extras
-    return hasMetier && !hasSlug && !hasSector && !hasQ;
-  }
-
+  // ✅ ALWAYS keep simple URL only: metier + country
   function setSimpleURL({ metier, country }){
     const u = new URL(location.href);
-    if (metier) u.searchParams.set("metier", String(metier));
+    if (metier)  u.searchParams.set("metier", String(metier));
     if (country) u.searchParams.set("country", String(country));
     ["slug","sector","q","iso"].forEach(k => u.searchParams.delete(k));
     history.replaceState({}, "", u.toString());
   }
 
-  // ✅ Accept ?metier=... as alias of ?slug=...
+  // ✅ Accept ?metier=... or ?slug=...
   function detectSlug(){
     const s = getParam("metier") || getParam("slug");
     if (s) return s;
@@ -290,8 +298,8 @@
       };
       const r = await fetch(full, { headers, signal: ctrl.signal, credentials:"omit" });
       const txt = await r.text();
+      if (!r.ok) throw new Error(`HTTP ${r.status} @ ${url} :: ${txt.slice(0,220)}`);
       const j = safeJSON(txt);
-      if (!r.ok) throw new Error(`HTTP ${r.status} @ ${url} :: ${txt.slice(0,200)}`);
       return j;
     } finally {
       clearTimeout(t);
@@ -311,11 +319,6 @@
     return { countries, sectors, metiers };
   }
 
-  function findCountry(countries, iso){
-    const needle = upper2(iso);
-    return countries.find(c => upper2(c?.iso) === needle) || null;
-  }
-
   function normalizeLabel(x){
     return pickStr(x?.label || x?.name || x?.title || x?.slug || "");
   }
@@ -328,6 +331,11 @@
     return pickStr(x?.slug || x?.id || "").trim();
   }
 
+  function findCountry(countries, iso){
+    const needle = upper2(iso);
+    return (countries || []).find(c => upper2(c?.iso) === needle) || null;
+  }
+
   // =========================
   // GEO (fallback only)
   // =========================
@@ -336,7 +344,6 @@
       const j = await fetchJSON("/v1/geo", { timeoutMs: 9000 });
       return upper2(j?.iso || "");
     } catch(e){
-      log("geo failed", e?.message || e);
       return "";
     }
   }
@@ -394,7 +401,7 @@
           <div class="ul-card" data-el="contentCard" style="display:none;">
             <div class="ul-kv">
               <h1 data-el="name"></h1>
-              <p data-el="desc"></p>
+              <div class="ul-submeta" data-el="submeta"></div>
             </div>
 
             <div class="ul-banners" data-el="banners" style="display:none;">
@@ -410,7 +417,7 @@
               </div>
             </div>
 
-            <div class="ul-meta" data-el="contentMeta"></div>
+            <div class="ul-sections" data-el="sections"></div>
           </div>
         </div>
       </div>
@@ -427,11 +434,6 @@
     if (el) el.textContent = txt || "";
   }
 
-  function setContentMeta(txt){
-    const el = ROOT.querySelector('[data-el="contentMeta"]');
-    if (el) el.textContent = txt || "";
-  }
-
   function showError(title, msg){
     const el = ROOT.querySelector('[data-el="error"]');
     if (!el) return;
@@ -441,11 +443,6 @@
   function hideError(){
     const el = ROOT.querySelector('[data-el="error"]');
     if (el) el.style.display = "none";
-  }
-  function escapeHTML(s){
-    return String(s||"").replace(/[&<>"']/g, m => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-    }[m]));
   }
 
   // =========================
@@ -494,7 +491,7 @@
   }
 
   // =========================
-  // Banners
+  // Banners (Sponsor vs Country)
   // =========================
   function setBanner(anchorEl, imgEl, imgUrl, clickUrl){
     const a = anchorEl, img = imgEl;
@@ -509,19 +506,41 @@
 
   function pickBannersFromPayload(payload){
     const meta = payload?.meta || {};
-    const sponsor = meta?.sponsor || payload?.sponsor || payload?.meta?.sponsor || null;
+    const sponsor =
+      meta?.sponsor ||
+      payload?.sponsor ||
+      payload?.meta?.sponsor ||
+      null;
+
+    if (!sponsor) return null;
 
     const sponsorLink = pickStr(
-      sponsor?.link || sponsor?.url || sponsor?.website ||
+      sponsor?.link ||
+      sponsor?.url ||
+      sponsor?.website ||
       meta?.sponsorLink ||
+      sponsor?.sponsorLink ||
       ""
     );
 
     const wideSponsor = pickStr(
-      sponsor?.logo_2 || sponsor?.logo_wide || sponsor?.wide || sponsor?.banner_wide || ""
+      sponsor?.logo_2 ||
+      sponsor?.logo2 ||
+      sponsor?.logo_wide ||
+      sponsor?.wide ||
+      sponsor?.banner_wide ||
+      sponsor?.banniere_large ||
+      ""
     );
+
     const squareSponsor = pickStr(
-      sponsor?.logo_1 || sponsor?.logo_square || sponsor?.square || sponsor?.banner_square || ""
+      sponsor?.logo_1 ||
+      sponsor?.logo1 ||
+      sponsor?.logo_square ||
+      sponsor?.square ||
+      sponsor?.banner_square ||
+      sponsor?.banniere_carre ||
+      ""
     );
 
     if (wideSponsor || squareSponsor) {
@@ -530,76 +549,159 @@
     return null;
   }
 
-  function pickFallbackBannersFromCatalog(country){
-    const banners = country?.banners || {};
+  function isUrl(s){
+  return typeof s === "string" && /^https?:\/\//i.test(s.trim());
+}
 
-    const wide = String(
-      banners?.banniere_sponsorisation_image_1 ||
-      banners?.image_1 ||
-      banners?.attente_wide ||
-      banners?.wide ||
-      banners?.attente ||
-      ""
-    ).trim();
+function collectUrlsDeep(obj, out, depth){
+  if (!obj || depth < 0) return out;
+  if (typeof obj === "string") {
+    if (isUrl(obj)) out.push(obj.trim());
+    return out;
+  }
+  if (Array.isArray(obj)) {
+    obj.forEach(x => collectUrlsDeep(x, out, depth - 1));
+    return out;
+  }
+  if (typeof obj === "object") {
+    // webflow image objects often look like { url: "https://..." }
+    if (isUrl(obj.url)) out.push(String(obj.url).trim());
 
-    const square = String(
-      banners?.banniere_sponsorisation_image_2 ||
-      banners?.image_2 ||
-      banners?.attente_square ||
-      banners?.square ||
-      banners?.attente ||
-      ""
-    ).trim();
+    // scan keys
+    Object.keys(obj).forEach(k => {
+      const v = obj[k];
+      collectUrlsDeep(v, out, depth - 1);
+    });
+  }
+  return out;
+}
 
-    const texte = String(
-      banners?.banniere_sponsorisation_texte ||
-      banners?.texte ||
-      ""
-    ).trim();
+function pickCountryBanners(countryMeta){
+  // countryMeta may be payload.pays, and banners may be nested or flat.
+  const bannersObj = countryMeta?.banners || {};
 
-    const cta = String(
-      banners?.banniere_sponsorisation_cta ||
-      banners?.cta ||
-      ""
-    ).trim();
+  // 1) Try “known” keys first (fast path)
+  const fastWide = pickStr(
+    bannersObj?.image_1 ||
+    bannersObj?.banniere_sponsorisation_image_1 ||
+    countryMeta?.banniere_sponsorisation_image_1 ||
+    countryMeta?.image_1 ||
+    ""
+  );
 
-    return { mode:"fallback", wide, square, click:"#", texte, cta };
+  const fastSquare = pickStr(
+    bannersObj?.image_2 ||
+    bannersObj?.banniere_sponsorisation_image_2 ||
+    countryMeta?.banniere_sponsorisation_image_2 ||
+    countryMeta?.image_2 ||
+    ""
+  );
+
+  if (isUrl(fastWide) || isUrl(fastSquare)) {
+    return {
+      mode: "fallback",
+      wide: isUrl(fastWide) ? fastWide : "",
+      square: isUrl(fastSquare) ? fastSquare : "",
+      click: "#",
+      texte: pickStr(bannersObj?.texte || countryMeta?.banniere_sponsorisation_texte || countryMeta?.texte || ""),
+      cta: pickStr(bannersObj?.cta || countryMeta?.banniere_sponsorisation_cta || countryMeta?.cta || "")
+    };
   }
 
+  // 2) Robust mode: scan for URLs in payload.pays and payload.pays.banners
+  const urls = [];
+  collectUrlsDeep(bannersObj, urls, 3);
+  collectUrlsDeep(countryMeta, urls, 3);
+
+  // de-dup
+  const uniq = [];
+  urls.forEach(u => { if (!uniq.includes(u)) uniq.push(u); });
+
+  return {
+    mode: "fallback",
+    wide: uniq[0] || "",
+    square: uniq[1] || uniq[0] || "",
+    click: "#",
+    texte: pickStr(bannersObj?.texte || countryMeta?.texte || ""),
+    cta: pickStr(bannersObj?.cta || countryMeta?.cta || "")
+  };
+}
+
+
   // =========================
-  // Render content
+  // Render content (HTML sections)
   // =========================
-  function renderContent(payload, selectedCountry){
+  function addSection(sectionsEl, title, html){
+    const safe = pickStr(html);
+    if (!safe) return;
+    const wrap = document.createElement("div");
+    wrap.className = "ul-section";
+    wrap.innerHTML = `<h2>${escapeHTML(title)}</h2><div class="ul-rich">${safe}</div>`;
+    sectionsEl.appendChild(wrap);
+  }
+
+  function renderContent(payload, selectedCountryFromCatalog){
     const card = ROOT.querySelector('[data-el="contentCard"]');
     card.style.display = "";
 
     const metier = payload?.metier || {};
     const name = pickStr(metier?.name || metier?.title || metier?.label || metier?.slug || "");
-    const desc = pickStr(metier?.description || metier?.short_description || metier?.resume || "");
-
     ROOT.querySelector('[data-el="name"]').textContent = name || "—";
-    ROOT.querySelector('[data-el="desc"]').textContent = desc || "";
 
+    // Country context: prefer Worker payload.pays (most accurate), else catalog
+    const countryMeta = payload?.pays || selectedCountryFromCatalog || {};
+    const iso = upper2(countryMeta?.iso || payload?.iso || "");
+    const lang = pickStr(countryMeta?.langue_finale || payload?.lang || "");
+
+    // Sub meta
+    const sub = ROOT.querySelector('[data-el="submeta"]');
+    const sponsorPick = pickBannersFromPayload(payload);
+    const bannerMode = sponsorPick ? "Sponsor" : "Attente (pays)";
+    sub.innerHTML = `
+      <span><b>Pays</b> : ${escapeHTML(iso || "?")}</span>
+      <span>•</span>
+      <span><b>Lang</b> : ${escapeHTML(lang || "?")}</span>
+      <span>•</span>
+      <span><b>Bannières</b> : ${escapeHTML(bannerMode)}</span>
+    `;
+
+    // Banners
     const bannersWrap = ROOT.querySelector('[data-el="banners"]');
     const wideA = ROOT.querySelector(".ul-banner-wide-a");
     const wideI = ROOT.querySelector(".ul-banner-wide-img");
     const sqA = ROOT.querySelector(".ul-banner-square-a");
     const sqI = ROOT.querySelector(".ul-banner-square-img");
 
-    const sponsorPick = pickBannersFromPayload(payload);
-    const pick = sponsorPick || pickFallbackBannersFromCatalog(selectedCountry);
+    console.log("[metier-page] pays object", countryMeta);
+    console.log("[metier-page] pays.banners", countryMeta?.banners);
+
+    const fallbackPick = pickCountryBanners(countryMeta);
+    const pick = sponsorPick || fallbackPick;
 
     const hasAny = !!(pick?.wide || pick?.square);
     bannersWrap.style.display = hasAny ? "" : "none";
-
     if (hasAny) {
       setBanner(wideA, wideI, pick.wide, pick.click);
       setBanner(sqA, sqI, pick.square, pick.click);
     }
 
-    const iso = upper2(selectedCountry?.iso || "");
-    const lang = pickStr(selectedCountry?.langue_finale || "");
-    setContentMeta(`Pays: ${iso || "?"} • Langue finale: ${lang || "?"} • Bannières: ${pick.mode}`);
+    // Sections: render HTML as-is (from Webflow)
+    const sectionsEl = ROOT.querySelector('[data-el="sections"]');
+    sectionsEl.innerHTML = "";
+
+    // Description can be very long; keep as first section
+    addSection(
+      sectionsEl,
+      "Description",
+      pickStr(metier?.description || metier?.short_description || metier?.resume || "")
+    );
+
+    // Optional fields returned by your worker (seen in payload)
+    addSection(sectionsEl, "Missions", pickStr(metier?.missions || ""));
+    addSection(sectionsEl, "Compétences", pickStr(metier?.competences || metier?.skills || ""));
+    addSection(sectionsEl, "Environnement", pickStr(metier?.environnement || ""));
+    addSection(sectionsEl, "Formation", pickStr(metier?.formation || ""));
+    addSection(sectionsEl, "Salaire", pickStr(metier?.salaire || ""));
   }
 
   // =========================
@@ -623,10 +725,6 @@
     const searchInput = ROOT.querySelector('[data-el="metierSearch"]');
     const suggestList = ROOT.querySelector('[data-el="suggestList"]');
 
-    // ✅ URL mode flags
-    const SIMPLE_MODE = isSimpleURLMode();
-    let userTouched = false;
-
     const slugFromURL = detectSlug();
     const urlISO = upper2(getParam("country") || getParam("iso") || "");
     const urlSector = pickStr(getParam("sector") || "");
@@ -649,28 +747,19 @@
 
     setMeta(`catalog: ${countries.length} pays • ${sectors.length} secteurs • ${metierIndex.length} métiers`);
 
-    // Decide default country: URL if valid -> else GEO -> else FR -> else none
+    // Default country: URL if valid -> else GEO -> else FR -> else first
     let selectedISO = "";
-    const hasURL = !!findCountry(countries, urlISO);
-    if (hasURL) selectedISO = urlISO;
+    if (findCountry(countries, urlISO)) selectedISO = urlISO;
 
     if (!selectedISO) {
       const geoISO = await detectGeoISO();
       if (findCountry(countries, geoISO)) selectedISO = geoISO;
     }
     if (!selectedISO && findCountry(countries, "FR")) selectedISO = "FR";
+    if (!selectedISO && countries[0]?.iso) selectedISO = upper2(countries[0].iso);
 
     // Populate countries
     countrySel.innerHTML = "";
-    if (!selectedISO) {
-      const opt0 = document.createElement("option");
-      opt0.value = "";
-      opt0.textContent = "Choisir un pays…";
-      opt0.disabled = true;
-      opt0.selected = true;
-      countrySel.appendChild(opt0);
-    }
-
     countries
       .slice()
       .sort((a,b) => normalizeLabel(a).localeCompare(normalizeLabel(b), "fr", { sensitivity:"base" }))
@@ -699,8 +788,6 @@
     });
 
     if (urlSector) sectorSel.value = urlSector;
-
-    // Prefill search
     if (urlQuery) searchInput.value = urlQuery;
 
     if (!searchInput.value && slugFromURL) {
@@ -718,24 +805,13 @@
         searchInput.value = it.label;
         searchInput.dataset.slug = it.slug;
         hideSuggest(suggestList);
-
-        // If in simple mode and user picked a metier, keep URL simple (optional)
-        if (SIMPLE_MODE && !userTouched) {
-          const iso = upper2(countrySel.value);
-          if (iso) setSimpleURL({ metier: it.slug, country: iso });
-        }
       });
     }
 
     searchInput.addEventListener("input", () => {
-      userTouched = true;
       searchInput.dataset.slug = "";
       refreshSuggest();
-
-      // ✅ Do not auto-write rich params in simple mode
-      if (!SIMPLE_MODE) {
-        setURLParams({ q: searchInput.value || "", sector: sectorSel.value || "", country: countrySel.value || "" });
-      }
+      // ✅ no URL pollution
     });
 
     searchInput.addEventListener("focus", refreshSuggest);
@@ -746,34 +822,24 @@
     });
 
     sectorSel.addEventListener("change", () => {
-      userTouched = true;
       refreshSuggest();
-
-      if (!SIMPLE_MODE) {
-        setURLParams({ sector: sectorSel.value || "", q: searchInput.value || "", country: countrySel.value || "" });
-      }
+      // ✅ no URL pollution
     });
 
     countrySel.addEventListener("change", () => {
-      userTouched = true;
-
-      if (!SIMPLE_MODE) {
-        setURLParams({ country: countrySel.value || "", sector: sectorSel.value || "", q: searchInput.value || "" });
-      } else {
-        const iso = upper2(countrySel.value);
-        const m = pickStr(searchInput.dataset.slug || detectSlug());
-        if (iso && m) setSimpleURL({ metier: m, country: iso });
-        else if (iso) setSimpleURL({ metier: pickStr(getParam("metier") || ""), country: iso });
-      }
+      // ✅ keep only country (and keep metier if already selected)
+      const iso = upper2(countrySel.value);
+      const m = pickStr(searchInput.dataset.slug || detectSlug());
+      if (iso && m) setSimpleURL({ metier: m, country: iso });
+      else if (iso) setSimpleURL({ metier: pickStr(getParam("metier") || ""), country: iso });
     });
 
-    // Debug button
+    // Debug button (only UI info — no /v1/filters)
     ROOT.querySelector('[data-action="debug"]').addEventListener("click", () => {
-      const iso = countrySel.value;
+      const iso = upper2(countrySel.value);
       const c = findCountry(countries, iso);
       console.log("=== METIER PAGE DEBUG ===");
       console.log("CATALOG_URL", CATALOG_URL);
-      console.log("SIMPLE_MODE", SIMPLE_MODE, "userTouched", userTouched);
       console.log("countries", countries.length, "sectors", sectors.length, "metiers", metierIndex.length);
       console.log("selected country", iso, c);
       console.log("selected sector", sectorSel.value);
@@ -792,7 +858,7 @@
         return;
       }
 
-      // slug: either picked from suggest or resolve from typed label
+      // slug: picked from suggest OR resolve from typed label (exact match)
       let slug = pickStr(searchInput.dataset.slug || "");
       if (!slug) {
         const q = pickStr(searchInput.value).toLowerCase();
@@ -804,12 +870,8 @@
         return;
       }
 
-      // ✅ URL update
-      if (SIMPLE_MODE && !userTouched) {
-        setSimpleURL({ metier: slug, country: iso });
-      } else {
-        setURLParams({ slug, country: iso, sector: sectorSel.value || "", q: searchInput.value || "" });
-      }
+      // ✅ ALWAYS keep simple URL
+      setSimpleURL({ metier: slug, country: iso });
 
       // Load from Worker
       setStatus(`Chargement de la fiche (${slug}) pour ${iso}…`);
@@ -817,7 +879,7 @@
 
       try {
         const payload = await loadMetierPayload({ slug, iso });
-        log("payload", payload);
+        if (DEBUG) log("payload", payload);
         renderContent(payload, selectedCountry);
         setStatus("OK.");
       } catch(e){
@@ -833,6 +895,8 @@
     // Auto-load if URL already has metier/slug + country
     if (slugFromURL && selectedISO) {
       if (!searchInput.dataset.slug) searchInput.dataset.slug = slugFromURL;
+      // ensure URL is normalized simple
+      setSimpleURL({ metier: slugFromURL, country: selectedISO });
       doLoad();
     }
   }
@@ -840,8 +904,9 @@
   main().catch((e) => {
     console.error("[metier-page] fatal", e);
     try {
-      ROOT.querySelector('[data-el="error"]').style.display = "";
-      ROOT.querySelector('[data-el="error"]').innerHTML = `<b>Fatal</b><div>${escapeHTML(e?.message || String(e))}</div>`;
+      const el = ROOT.querySelector('[data-el="error"]');
+      el.style.display = "";
+      el.innerHTML = `<b>Fatal</b><div>${escapeHTML(e?.message || String(e))}</div>`;
     } catch(_) {}
   });
 
