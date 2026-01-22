@@ -13,9 +13,9 @@
    ✅ FAQ: no flicker (hard hidden + cleared, shown only with data)
 */
 (() => {
-  if (window.__ULYDIA_METIER_V118__) return;
+  if (window.__ULYDIA_METIER_BOOT__ || window.__ULYDIA_METIER_V118__) return;
+  window.__ULYDIA_METIER_BOOT__ = true;
   window.__ULYDIA_METIER_V118__ = true;
-
   const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const CATALOG_URL = `${ASSETS_BASE}/catalog.json`;
 
@@ -157,21 +157,33 @@ try {
 
 
   function ensureRoot() {
-    let root = document.getElementById("ulydia-metier-root");
-    if (!root) { root = document.createElement("div"); root.id = "ulydia-metier-root"; document.body.prepend(root); }
+    // Ensure a SINGLE root (prevents double "Chargement…" overlays)
+    const roots = Array.from(document.querySelectorAll("#ulydia-metier-root"));
+    if (roots.length > 1) {
+      roots.slice(1).forEach(r => { try { r.remove(); } catch(_) {} });
+    }
+    let root = roots[0] || document.getElementById("ulydia-metier-root");
+    if (!root) {
+      root = document.createElement("div");
+      root.id = "ulydia-metier-root";
+      document.body.prepend(root);
+    }
     return root;
   }
-  function renderPlaceholder(root) {
+
+  function renderPlaceholder() {
+    const root = ensureRoot();
     root.innerHTML = `
-      <div style="padding:16px;font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial">
+      <div style="padding:16px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial">
         <div style="display:flex;align-items:center;gap:10px">
-          <div style="width:10px;height:10px;border-radius:999px;background:#7c3aed"></div>
-          <div style="font-weight:700">Ulydia — loading metier page…</div>
+          <div style="width:10px;height:10px;border-radius:999px;background:#6366f1"></div>
+          <div style="font-weight:700">Chargement…</div>
         </div>
-        <div style="margin-top:6px;color:#6b7280;font-size:13px">If this stays visible, check Console for errors.</div>
+        <div style="margin-top:6px;color:#64748b;font-size:13px">Préparation de la fiche métier</div>
       </div>
     `;
   }
+
   function renderShell(root) { root.innerHTML = `<div class="w-full h-full" style="background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);"><!-- Barre de Filtres -->
    <div class="w-full" style="background: white; border-bottom: 2px solid var(--border); box-shadow: 0 2px 8px rgba(0,0,0,.05);">
     <div class="max-w-[1200px] mx-auto px-6 py-4">
@@ -1813,7 +1825,7 @@ function blocMatches(bloc, slug, iso) {
   // ---------- Boot ----------
   async function boot() {
     const root = ensureRoot();
-    renderPlaceholder(root);
+    renderPlaceholder();
 
     ensureLink("ulydia-font-outfit", "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap");
     ensureScript("ulydia-tailwind", "https://cdn.tailwindcss.com");
@@ -2168,7 +2180,7 @@ function blocMatches(bloc, slug, iso) {
     const slug = getSlug();
     console.log("[metier-page] v12.4 boot", { iso, slug });
 
-    try { renderShell(root); }
+    try { root.innerHTML = ""; renderShell(root); }
     catch (e) { overlayError("Render shell failed", e); return; }
 
     // MUST happen immediately after shell render (prevents placeholders)
