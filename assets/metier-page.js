@@ -1,4 +1,4 @@
-/* metier-page.v11.8.js — Ulydia
+/* metier-page.v12.1.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
       - sponsor_logo_2 => wide (top)
@@ -118,15 +118,15 @@
     return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
   }
 
-  function mdInline(s){
-    // supports **bold** and __bold__ in plain text inputs
+
+  // Convert **bold** or __bold__ in plain text to <strong>bold</strong> safely (escapes everything else).
+  function formatInlineBold(s){
     const esc = escapeHtml(String(s || ""));
+    // Replace escaped **...** and __...__
     return esc
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/__(.+?)__/g, "<strong>$1</strong>");
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/__([^_]+)__/g, "<strong>$1</strong>");
   }
-
-
   async function fetchJSON(url, opt={}) {
     const res = await fetch(url, { cache: "no-store", ...opt });
     if (!res.ok) {
@@ -1275,7 +1275,7 @@
     showCard(titleId);
     const s = String(htmlOrText);
     if (/<[a-z][\s\S]*>/i.test(s)) node.innerHTML = s;
-    else node.innerHTML = `<p>${mdInline(s).replace(/\n+/g, "<br/>")}</p>`;
+    else node.innerHTML = `<p>${formatInlineBold(s).replace(/\n+/g, "<br/>")}</p>`;
   }
 
   // ---------- Hide pays-bloc UI by header text (no IDs in template) ----------
@@ -1415,12 +1415,63 @@
     const p = qp();
     const isPreview = String(p.get("preview") || "") === "1";
 
-    const wideA = document.getElementById("sponsor-banner-link");
-    const logoA = document.getElementById("sponsor-logo-link");
-    const logoBox = logoA ? logoA.querySelector(".sponsor-logo-square") : null;
-    const ctaBtn = document.getElementById("sponsor-cta") || document.getElementById("sponsor-cta-btn");
+    const root = document.getElementById("ulydia-metier-root") || document.body;
 
-    function setLinks(linkUrl){
+    // Prefer the shell IDs, but support alt hooks or auto-inject if missing
+    let wideA = document.getElementById("sponsor-banner-link")
+      || root.querySelector('.ul-banner-wide')
+      || root.querySelector('[data-ul-banner="wide"]');
+
+    let logoA = document.getElementById("sponsor-logo-link")
+      || root.querySelector('.ul-banner-square')
+      || root.querySelector('[data-ul-banner="square"]');
+
+    // If the template doesn't contain placeholders, inject them (so banners always work)
+    if (!wideA) {
+      const anchor = document.createElement("a");
+      anchor.id = "sponsor-banner-link";
+      anchor.setAttribute("data-ul-banner", "wide");
+      anchor.href = "#";
+      anchor.target = "_blank";
+      anchor.rel = "noopener";
+      anchor.style.display = "block";
+      anchor.style.width = "100%";
+      anchor.style.marginTop = "12px";
+      // insert after H1 if possible
+      const h1 = document.getElementById("nom-metier")?.closest("h1") || document.getElementById("nom-metier");
+      if (h1 && h1.parentNode) h1.parentNode.insertBefore(anchor, h1.nextSibling);
+      else root.prepend(anchor);
+      wideA = anchor;
+    }
+
+    if (!logoA) {
+      const anchor = document.createElement("a");
+      anchor.id = "sponsor-logo-link";
+      anchor.setAttribute("data-ul-banner", "square");
+      anchor.href = "#";
+      anchor.target = "_blank";
+      anchor.rel = "noopener";
+      anchor.style.display = "block";
+      anchor.style.width = "100%";
+
+      const box = document.createElement("div");
+      box.className = "sponsor-logo-square";
+      box.style.width = "100%";
+      box.style.borderRadius = "16px";
+      box.style.overflow = "hidden";
+      box.style.border = "2px solid var(--border)";
+      box.style.background = "#fff";
+      anchor.appendChild(box);
+
+      // Try to insert into right sidebar if exists
+      const sidebar = root.querySelector('.right-panel') || root.querySelector('[data-ul-sidebar]') || root;
+      sidebar.appendChild(anchor);
+      logoA = anchor;
+    }
+
+    const logoBox = logoA ? (logoA.querySelector(".sponsor-logo-square") || logoA) : null;
+    const ctaBtn = document.getElementById("sponsor-cta") || document.getElementById("sponsor-cta-btn");
+function setLinks(linkUrl){
       if (!linkUrl) return;
       if (wideA) wideA.href = linkUrl;
       if (logoA) logoA.href = linkUrl;
@@ -1452,32 +1503,52 @@
       return;
     }
 
-    // 2) Webflow metier fields (STRICT mapping)
+    // 2) Webflow metier fields (ROBUST mapping: supports Webflow slugged keys)
     const m = payload?.metier || payload?.job || payload?.item || payload || {};
     const f = m?.fieldData || m?.fields || m || {};
 
-    const wfName = String(f.sponsor_name || "").trim();
-    const wfLink = String(f.lien_sponsor?.url || f.lien_sponsor?.href || f.lien_sponsor || "").trim();
-    const wideUrl = pickUrl(f.sponsor_logo_2); // wide
-    const squareUrl = pickUrl(f.sponsor_logo_1); // square
+    function pickFirst(obj, keys){
+      for (const k of keys){
+        if (!obj) continue;
+        const v = obj[k];
+        if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+      }
+      return "";
+    }
 
-    const hasSponsor = !!(wideUrl || squareUrl);
+    // Webflow API often returns slugged keys like "sponsor-logo-2" etc.
+    const wfNameRaw = pickFirst(f, ["sponsor_name","sponsorName","sponsor-name","Sponsor_name","Sponsor Name"]);
+    const wfLinkRaw = pickFirst(f, ["lien_sponsor","lienSponsor","lien-sponsor","Lien_sponsor","Lien Sponsor"]);
+
+    const wfName = String(wfNameRaw || "").trim();
+    const wfLink = String(
+      wfLinkRaw?.url || wfLinkRaw?.href || wfLinkRaw?.link || wfLinkRaw || ""
+    ).trim();
+
+    const wideUrl = pickUrl(pickFirst(f, ["sponsor_logo_2","sponsorLogo2","sponsor-logo-2","Sponsor_logo_2","Sponsor logo 2","Sponsor_logo_2 (wide)"])); // wide
+    const squareUrl = pickUrl(pickFirst(f, ["sponsor_logo_1","sponsorLogo1","sponsor-logo-1","Sponsor_logo_1","Sponsor logo 1","Sponsor_logo_1 (square)"])); // square
+
+    // Also accept nested sponsor object if present
+    const sObj = payload?.sponsor || f?.sponsor || null;
+    const wideUrl2 = wideUrl || pickUrl(sObj?.logo_2 || sObj?.logo2 || sObj?.wide || sObj?.banner_wide || "");
+    const squareUrl2 = squareUrl || pickUrl(sObj?.logo_1 || sObj?.logo1 || sObj?.square || sObj?.banner_square || "");
+    const link2 = wfLink || String(sObj?.link || sObj?.url || "").trim();
+    const name2 = wfName || String(sObj?.name || "").trim();
+
+    const hasSponsor = !!(wideUrl2 || squareUrl2 || name2 || link2);
 
     if (hasSponsor) {
-      // sponsored: never show country fallback banners on this fiche
-      if (wideUrl) replaceWideBannerWithImg(wideA, wideUrl, "");
-      else if (wideA) { wideA.classList.remove("ul-has-banner-img"); wideA.style.backgroundImage = "none"; }
-
-      if (squareUrl) replaceSquareWithImg(logoBox, squareUrl, "");
-      else if (logoBox) { logoBox.style.backgroundImage = "none"; logoBox.innerHTML = ""; }
-
-      setLinks(wfLink || fallbackLink);
-      setNames(wfName);
+      // IMPORTANT: if sponsor exists, do NOT show fallback banners
+      replaceWideBannerWithImg(wideA, wideUrl2, "");        // no fallback
+      replaceSquareWithImg(logoBox, squareUrl2, "");        // no fallback
+      setLinks(link2 || fallbackLink);
+      setNames(name2);
       if (ctaBtn) ctaBtn.style.display = ""; // keep
       return;
     }
 
     // 3) Fallback country banners (no sponsor)
+
     replaceWideBannerWithImg(wideA, fb.wide, "");
     replaceSquareWithImg(logoBox, fb.square, "");
     setLinks(fallbackLink);
@@ -1516,8 +1587,8 @@
     wrap.innerHTML = list.map(item => {
       const q = String(item.question || item.q || item["Question"] || "").trim();
       const a = String(item.answer || item.a || item["Réponse"] || item["Reponse"] || "").trim();
-      const qSafe = escapeHtml(q || "—");
-      const aHtml = /<[a-z][\s\S]*>/i.test(a) ? a : `<p>${mdInline(a)}</p>`;
+      const qSafe = formatInlineBold(q || "—");
+      const aHtml = /<[a-z][\s\S]*>/i.test(a) ? a : `<p>${formatInlineBold(a)}</p>`;
       return `
         <div class="faq-item">
           <button class="faq-question w-full text-left p-4 rounded-lg transition-all flex items-start justify-between gap-3" style="background: white; border: 2px solid var(--border);">
@@ -2008,25 +2079,32 @@
       hidePaysCardsByHeader();
     }
 
-    // FAQ
-    const faqList0 = payload?.faq || payload?.faqs || payload?.FAQ || null;
-    let faqList = Array.isArray(faqList0) ? faqList0 : [];
-    // If worker payload doesn't include FAQs, try dedicated endpoints (best-effort, non-blocking)
-    if (faqList.length === 0) {
-      const tries = [
-        `${WORKER_URL}/v1/faqs?iso=${encodeURIComponent(iso)}&slug=${encodeURIComponent(slug)}&proxy_secret=${encodeURIComponent(PROXY_SECRET)}`,
-        `${WORKER_URL}/v1/faq?iso=${encodeURIComponent(iso)}&slug=${encodeURIComponent(slug)}&proxy_secret=${encodeURIComponent(PROXY_SECRET)}`,
-        `${WORKER_URL}/v1/metier-faqs?iso=${encodeURIComponent(iso)}&slug=${encodeURIComponent(slug)}&proxy_secret=${encodeURIComponent(PROXY_SECRET)}`
+    // FAQ (prefer payload, otherwise try dedicated endpoints)
+    let faqList = payload?.faq || payload?.faqs || payload?.FAQ || null;
+
+    async function tryFetchFaqs(){
+      const base = WORKER_URL.replace(/\/$/, "");
+      const qs = new URLSearchParams({ iso, slug, proxy_secret: PROXY_SECRET });
+      const candidates = [
+        `${base}/v1/faqs?${qs.toString()}`,
+        `${base}/v1/faq?${qs.toString()}`,
+        `${base}/v1/metier-faqs?${qs.toString()}`,
+        `${base}/v1/metier-page/faqs?${qs.toString()}`
       ];
-      for (const u of tries) {
-        try {
+      for (const u of candidates){
+        try{
           const j = await fetchJSON(u);
-          const arr = j?.faq || j?.faqs || j?.items || j?.data || null;
-          if (Array.isArray(arr) && arr.length) { faqList = arr; break; }
-        } catch(_) {}
+          const list = j?.faq || j?.faqs || j?.items || j?.data || null;
+          if (Array.isArray(list) && list.length) return list;
+        }catch(e){}
       }
+      return [];
     }
-    renderFAQ(faqList);
+
+    if (!Array.isArray(faqList) || faqList.length === 0) {
+      faqList = await tryFetchFaqs();
+    }
+    renderFAQ(Array.isArray(faqList) ? faqList : []);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
