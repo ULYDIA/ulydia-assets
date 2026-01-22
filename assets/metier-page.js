@@ -1,4 +1,4 @@
-/* metier-page.v12.2.js — Ulydia
+/* metier-page.v12.4.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
       - sponsor_logo_2 => wide (top)
@@ -40,14 +40,21 @@
     if (document.getElementById(id)) return;
     const s = document.createElement("script");
     s.id = id; s.src = src; s.async = true;
-    s.onerror = () => console.warn("[metier.v11.8] failed to load", src);
+    s.onerror = () => console.warn("[metier.v12.4] failed to load", src);
     document.head.appendChild(s);
   }
 
   function overlayError(title, err) {
     try {
       const msg = err ? (err.stack || err.message || String(err)) : "";
-      console.error("[metier.v11.8]", title, err);
+      console.error("[metier.v12.4]", title, err);
+
+try {
+  const h1 = document.getElementById("metier-title") || document.querySelector("h1");
+  if (h1) h1.textContent = "Erreur de chargement";
+  const a = document.getElementById("accroche-metier");
+  if (a) a.textContent = "Impossible de charger la fiche métier. Ouvre la console / Network pour voir la cause (CORS, token, API Webflow…).";
+} catch (_) {}
       let box = document.getElementById("ulydia-metier-error");
       if (!box) {
         box = document.createElement("pre");
@@ -66,7 +73,7 @@
         box.style.font = "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
         document.body.appendChild(box);
       }
-      box.textContent = `[metier-page.v11.8] ${title}\n\n${msg}`;
+      box.textContent = `[metier-page.v12.4] ${title}\n\n${msg}`;
     } catch(_) {}
   }
 
@@ -128,13 +135,26 @@
       .replace(/__([^_]+)__/g, "<strong>$1</strong>");
   }
   async function fetchJSON(url, opt={}) {
-    const res = await fetch(url, { cache: "no-store", ...opt });
+  const timeoutMs = Number(opt.timeoutMs || 10000);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { cache: "no-store", ...opt, signal: ctrl.signal });
     if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      throw new Error(`Fetch failed ${res.status} for ${url} :: ${t.slice(0,160)}`);
+      const txt = await res.text().catch(() => "");
+      throw new Error(`Fetch failed ${res.status} for ${url} :: ${txt.slice(0,160)}`);
     }
-    return res.json();
+    return await res.json();
+  } catch (e) {
+    if (e && e.name === "AbortError") {
+      throw new Error(`Fetch timeout after ${timeoutMs}ms for ${url}`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(t);
   }
+}
+
 
   function ensureRoot() {
     let root = document.getElementById("ulydia-metier-root");
@@ -1340,7 +1360,7 @@
     url.searchParams.set("slug", slug);
     url.searchParams.set("proxy_secret", PROXY_SECRET);
     return fetchJSON(url.toString()).catch((e) => {
-      console.warn("[metier.v11.8] worker payload failed", e);
+      console.warn("[metier.v12.4] worker payload failed", e);
       return null;
     });
   }
@@ -2146,7 +2166,7 @@ function blocMatches(bloc, slug, iso) {
 
     const iso = getISO();
     const slug = getSlug();
-    console.log("[metier-page] v11.8 boot", { iso, slug });
+    console.log("[metier-page] v12.4 boot", { iso, slug });
 
     try { renderShell(root); }
     catch (e) { overlayError("Render shell failed", e); return; }
