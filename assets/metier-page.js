@@ -1,4 +1,4 @@
-/* metier-page.v12.1.js — Ulydia
+/* metier-page.v12.2.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
       - sponsor_logo_2 => wide (top)
@@ -199,7 +199,7 @@
        </svg>
       </div>
       <div class="flex-1"><span class="badge badge-primary">💼 Fiche Métier</span>
-       <h1 id="nom-metier" class="text-5xl font-bold mt-4 mb-3 tracking-tight" style="color: var(--text);">Développeur Full-Stack</h1>
+       <h1 id="nom-metier" class="text-5xl font-bold mt-4 mb-3 tracking-tight" style="color: var(--text);">Chargement…</h1>
        <p id="accroche-metier" class="text-xl" style="color: var(--muted);">Créez des applications web modernes de A à Z, maîtrisez le front-end et le back-end</p>
       </div>
      </div><!-- Sponsor Banner Wide (Centré sous l'accroche) -->
@@ -228,7 +228,7 @@
          </svg> Vue d'ensemble</h2>
        </div>
        <div class="rich-content">
-        <p>Le <strong>Développeur Full-Stack</strong> est un professionnel polyvalent capable de travailler sur l'ensemble des couches d'une application web : l'interface utilisateur (front-end), la logique métier et les bases de données (back-end), ainsi que l'infrastructure et le déploiement.</p>
+        <p>Le <strong></strong> est un professionnel polyvalent capable de travailler sur l'ensemble des couches d'une application web : l'interface utilisateur (front-end), la logique métier et les bases de données (back-end), ainsi que l'infrastructure et le déploiement.</p>
         <p>Ce métier requiert une expertise technique large et une capacité d'adaptation constante aux nouvelles technologies. Le développeur Full-Stack intervient sur toutes les phases du cycle de développement, de la conception à la mise en production.</p>
         <p>Très recherché sur le marché, ce profil permet de comprendre l'ensemble d'un projet web et d'avoir une vision globale des enjeux techniques et fonctionnels.</p>
        </div>
@@ -850,8 +850,8 @@
   {
     "@context": "https://schema.org",
     "@type": "JobPosting",
-    "title": "Développeur Full-Stack",
-    "description": "Le Développeur Full-Stack est un professionnel polyvalent capable de travailler sur l'ensemble des couches d'une application web : front-end, back-end et infrastructure.",
+    "title": "",
+    "description": "Le  est un professionnel polyvalent capable de travailler sur l'ensemble des couches d'une application web : front-end, back-end et infrastructure.",
     "datePosted": "2024-01-01",
     "employmentType": ["FULL_TIME", "CONTRACT", "PART_TIME"],
     "hiringOrganization": {
@@ -879,7 +879,7 @@
   </script>
   <script>
     const defaultConfig = {
-      nom: 'Développeur Full-Stack',
+      nom: '',
       accroche: 'Créez des applications web modernes de A à Z, maîtrisez le front-end et le back-end',
       sponsor_name: 'École 42',
       lien_sponsor: 'https://www.42.fr',
@@ -905,7 +905,7 @@
     
     // Base de données de métiers pour l'autocomplétion
     const metiersDatabase = [
-      { nom: 'Développeur Full-Stack', secteur: 'tech', pays: ['FR', 'BE', 'CH', 'CA', 'LU', 'UK', 'US'] },
+      { nom: '', secteur: 'tech', pays: ['FR', 'BE', 'CH', 'CA', 'LU', 'UK', 'US'] },
       { nom: 'Développeur Front-End', secteur: 'tech', pays: ['FR', 'BE', 'CH', 'CA', 'LU'] },
       { nom: 'Développeur Back-End', secteur: 'tech', pays: ['FR', 'BE', 'CH', 'CA'] },
       { nom: 'Data Scientist', secteur: 'tech', pays: ['FR', 'BE', 'CH', 'UK', 'US'] },
@@ -1386,30 +1386,66 @@
     }
   }
 
-  async function resolveCountryBanners(iso) {
-    const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`).catch(() => null);
-    const countries = data?.countries || [];
-    const c = countries.find(x => String(x?.iso || "").toUpperCase() === iso) || null;
-    if (!c) return { wide:"", square:"", cta:"" };
-    const u1 = pickUrl(c?.banners?.image_1);
-    const u2 = pickUrl(c?.banners?.image_2);
+  
+async function resolveCountryBanners(iso, payload) {
+  // 1) Prefer banners coming from the Worker payload (single source of truth)
+  const pPays = payload?.pays || payload?.country || payload?.paysData || null;
+  const pB = pPays?.banners || pPays?.banner || payload?.banners || null;
 
-    // choose by ratio when both exist
-    const ratio = async (u)=> {
-      if(!u) return 0;
-      return new Promise(res=>{
-        const im=new Image();
-        im.onload=()=>res((im.naturalWidth||0)/((im.naturalHeight||1)||1));
-        im.onerror=()=>res(0);
-        im.src=u;
-      });
-    };
-    const [r1,r2] = await Promise.all([ratio(u1), ratio(u2)]);
-    const wide = (r1 >= r2) ? u1 : u2;
-    const square = (r1 >= r2) ? u2 : u1;
-    const cta = String(c?.banners?.cta || "").trim();
-    return { wide, square, cta };
+  const pick = (...vals) => pickUrl(pickFirst(...vals));
+
+  const fromPayloadWide = pick(
+    pB?.wide, pB?.banner_wide, pB?.image_wide, pB?.imageWide, pB?.logo_2, pB?.image_2,
+    pPays?.banner_wide, pPays?.banniere_wide, pPays?.banniere_2, pPays?.image_2,
+    payload?.banner_wide, payload?.banniere_wide
+  );
+  const fromPayloadSquare = pick(
+    pB?.square, pB?.banner_square, pB?.image_square, pB?.imageSquare, pB?.logo_1, pB?.image_1,
+    pPays?.banner_square, pPays?.banniere_square, pPays?.banniere_1, pPays?.image_1,
+    payload?.banner_square, payload?.banniere_square
+  );
+  const fromPayloadCTA = String(pB?.cta || pPays?.cta || "").trim();
+
+  if (fromPayloadWide || fromPayloadSquare) {
+    return { wide: fromPayloadWide, square: fromPayloadSquare, cta: fromPayloadCTA };
   }
+
+  // 2) Fallback to catalog.json countries map (legacy)
+  const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`).catch(() => null);
+  const countries = data?.countries || [];
+  const c = countries.find(x => String(x?.iso || x?.code || "").toUpperCase() === iso) || null;
+  if (!c) return { wide:"", square:"", cta:"" };
+
+  // Support multiple naming conventions
+  const u1 = pickUrl(
+    pickFirst(
+      c?.banners?.image_1, c?.banners?.square, c?.banners?.logo_1,
+      c?.banner_1, c?.image_1, c?.square
+    )
+  );
+  const u2 = pickUrl(
+    pickFirst(
+      c?.banners?.image_2, c?.banners?.wide, c?.banners?.logo_2,
+      c?.banner_2, c?.image_2, c?.wide
+    )
+  );
+
+  // If both exist, choose by ratio when possible
+  const ratio = async (u)=> {
+    if(!u) return 0;
+    return new Promise(res=>{
+      const im=new Image();
+      im.onload=()=>res((im.naturalWidth||0)/((im.naturalHeight||1)||1));
+      im.onerror=()=>res(0);
+      im.src=u;
+    });
+  };
+  const [r1,r2] = await Promise.all([ratio(u1), ratio(u2)]);
+  const wide = (r1 >= r2) ? u2 : u1;   // prefer the more "wide" ratio
+  const square = (r1 >= r2) ? u1 : u2;
+  const cta = String(c?.banners?.cta || c?.cta || "").trim();
+  return { wide, square, cta };
+}
 
   async function applySponsor({ iso, slug, payload }) {
     const p = qp();
@@ -1485,7 +1521,7 @@ function setLinks(linkUrl){
     }
 
     // fallback banners (always available)
-    const fb = await resolveCountryBanners(iso);
+    const fb = await resolveCountryBanners(iso, payload);
     const fallbackLink = `/sponsorship?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
 
     // 1) Preview
@@ -1572,8 +1608,29 @@ function setLinks(linkUrl){
     });
   }
   function renderFAQ(list) {
-    const faqCard = cardByTitleId("faq-title");
-    if (!faqCard) return;
+    let faqCard = cardByTitleId("faq-title");
+
+    // If template doesn't include a FAQ card, create one (full-code mode)
+    if (!faqCard) {
+      const root = document.getElementById("ulydia-metier-root") || document.body;
+      const host = root.querySelector(".left-panel") || root.querySelector(".main-content") || root;
+      const wrap = document.createElement("section");
+      wrap.className = "card mt-6";
+      wrap.innerHTML = `
+        <div class="card-header">
+          <div class="icon-badge">❓</div>
+          <div>
+            <div class="section-title" id="faq-title">FAQ</div>
+            <div class="section-subtitle">Questions fréquentes</div>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="space-y-3" data-ul-faqs></div>
+        </div>
+      `;
+      host.appendChild(wrap);
+      faqCard = wrap;
+    }
 
     if (!Array.isArray(list) || list.length === 0) {
       faqCard.style.display = "none";
@@ -1621,18 +1678,50 @@ function setLinks(linkUrl){
     return undefined;
   }
 
-  function blocMatches(bloc, slug, iso) {
-    const b = bloc?.fieldData || bloc?.fields || bloc || {};
-    const bIso = String(getFrom(b, "country_code", "code_iso", "iso", "ISO") || "").trim().toUpperCase();
-    const bSlug = String(getFrom(b, "job_slug", "Job_slug", "metier_slug", "slug", "jobSlug") || "").trim();
-    // Sometimes a reference object exists
-    const ref = getFrom(b, "metier_lie", "métier lié", "metier", "job") || null;
-    const refSlug = ref && (ref.slug || ref?.fieldData?.slug || ref?.fields?.slug);
+  
+function blocMatches(bloc, slug, iso) {
+  const b = bloc?.fieldData || bloc?.fields || bloc || {};
 
-    const okIso = !bIso || bIso === iso;
-    const okSlug = (!!bSlug && norm(bSlug) === norm(slug)) || (!!refSlug && norm(refSlug) === norm(slug));
-    return okIso && okSlug;
-  }
+  const isoCand = pickFirst(
+    getFrom(b, "country_code", "Country_code", "code_iso", "Code ISO", "iso", "ISO"),
+    // sometimes inside a linked Pays reference
+    (Array.isArray(b.Pays) ? b.Pays[0]?.iso : b.Pays?.iso),
+    (Array.isArray(b.pays) ? b.pays[0]?.iso : b.pays?.iso),
+    b?.pays_ref?.iso
+  );
+  const bIso = String(isoCand || "").trim().toUpperCase();
+
+  // slug can be stored directly, or as a reference to the Metier item
+  const refJob = getFrom(b, "job_slug", "Job_slug", "Job slug", "metier", "metier_lie", "métier lié", "metier lié", "job") || null;
+
+  const refJobSlug =
+    (typeof refJob === "string" ? refJob : null) ||
+    refJob?.slug ||
+    refJob?.fieldData?.slug ||
+    refJob?.fields?.slug ||
+    refJob?.fieldData?.Slug ||
+    refJob?.fields?.Slug ||
+    "";
+
+  const directSlug = pickFirst(
+    getFrom(b, "metier_slug", "metierSlug", "jobSlug", "slug"),
+    getFrom(b, "Job_slug_slug", "job_slug_slug")
+  );
+
+  const bSlug = String(directSlug || refJobSlug || "").trim();
+
+  // Also accept when only the job NAME is stored in "métier lié" (no slug)
+  const refJobName =
+    refJob?.name || refJob?.fieldData?.name || refJob?.fields?.name || "";
+
+  const okIso = !bIso || bIso === iso;
+  const okSlug =
+    (!!bSlug && norm(bSlug) === norm(slug)) ||
+    (!!bSlug && norm(bSlug).startsWith(norm(slug))) || // tolerate suffix like "-47b49"
+    (!!refJobName && norm(refJobName).includes(norm(slug))); // last-resort
+
+  return okIso && okSlug;
+}
 
   function findBloc(payload, slug, iso) {
     const candidates =
