@@ -1,4 +1,4 @@
-/* metier-page.v11.8.js — Ulydia
+/* metier-page.v12.0.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
       - sponsor_logo_2 => wide (top)
@@ -1486,6 +1486,78 @@
       });
     });
   }
+
+  // ---------- FAQ ----------
+  function getFaqFields(item){
+    return item?.fieldData || item?.fields || item || {};
+  }
+  function extractIsoFromPaysRef(p){
+    const f = p?.fieldData || p?.fields || p || {};
+    let iso = String(f.code_iso || f.codeIso || f.iso || f.ISO || f["Code ISO"] || f["ISO"] || "").trim().toUpperCase();
+    if (!iso) {
+      const slug = String(p?.slug || f.slug || "").trim();
+      const m = slug.match(/(^|[-_])([a-z]{2})$/i);
+      if (m && m[2]) iso = m[2].toUpperCase();
+    }
+    return iso;
+  }
+  function filterFaqForContext(list, slug, iso, lang){
+    if (!Array.isArray(list)) return [];
+    const S = norm(slug);
+    const ISO = String(iso||"").trim().toUpperCase();
+    const LANG = String(lang||"").trim().toLowerCase();
+
+    const scored = [];
+    for (const it of list) {
+      const f = getFaqFields(it);
+      const q = String(f.Question || f.question || "").trim();
+      const a = String(f["Réponse"] || f.Reponse || f.reponse || f.answer || "").trim();
+      if (!q || !a) continue;
+
+      const fLang = String(f.Langue || f.langue || f.lang || "").trim().toLowerCase();
+      const langOk = !fLang || !LANG || fLang === LANG;
+
+      let paysOk = true;
+      const pays = f.Pays || f.pays || f.countries || f.country || null;
+      if (pays) {
+        const arr = Array.isArray(pays) ? pays : [pays];
+        const isos = arr.map(extractIsoFromPaysRef).filter(Boolean);
+        paysOk = (isos.length === 0) ? true : isos.includes(ISO);
+      }
+
+      let metierOk = true;
+      const ref = f["Métier lié"] || f["Metier lié"] || f.metier_lie || f.metier || f.job || null;
+      if (ref) {
+        const refSlug = String(ref?.slug || ref?.fieldData?.slug || ref?.fields?.slug || "").trim();
+        metierOk = !!refSlug && norm(refSlug) === S;
+      }
+
+      // If there's no explicit metier ref, we accept (FAQ can be "generic").
+      // But if there IS a ref, it must match.
+      if (!metierOk || !paysOk || !langOk) continue;
+
+      const ordre = Number(f.Ordre ?? f.ordre ?? 9999);
+      scored.push({ it, ordre });
+    }
+    scored.sort((a,b)=> (a.ordre-b.ordre));
+    return scored.map(x=>x.it);
+  }
+
+  function wireFAQToggles() {
+    $all(".faq-question").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const item = btn.closest(".faq-item");
+        if (!item) return;
+        const ans = $(".faq-answer", item);
+        const icon = $(".faq-icon", item);
+        if (!ans) return;
+        const open = !ans.classList.contains("hidden");
+        if (open) { ans.classList.add("hidden"); if (icon) icon.style.transform = "rotate(0deg)"; }
+        else { ans.classList.remove("hidden"); if (icon) icon.style.transform = "rotate(180deg)"; }
+      });
+    });
+  }
+
   function renderFAQ(list) {
     const faqCard = cardByTitleId("faq-title");
     if (!faqCard) return;
@@ -1494,6 +1566,37 @@
       faqCard.style.display = "none";
       return;
     }
+    faqCard.style.display = "";
+
+    const wrap = faqCard.querySelector(".space-y-3") || faqCard.querySelector(".space-y-4") || faqCard;
+    if (!wrap) return;
+
+    wrap.innerHTML = list.map(item => {
+      const f = getFaqFields(item);
+      const q = String(f.Question || f.question || "").trim();
+      const a = String(f["Réponse"] || f.Reponse || f.reponse || f.answer || "").trim();
+      const qSafe = escapeHtml(q || "—");
+      const aHtml = /<[a-z][\s\S]*>/i.test(a) ? a : `<p>${escapeHtml(a)}</p>`;
+      return `
+        <div class="faq-item">
+          <button class="faq-question w-full text-left p-4 rounded-lg transition-all flex items-start justify-between gap-3" style="background: white; border: 2px solid var(--border);">
+            <div class="flex items-start gap-3 flex-1">
+              <span class="text-xl flex-shrink-0">❓</span>
+              <span class="font-semibold text-sm" style="color: var(--text);">${qSafe}</span>
+            </div>
+            <svg class="faq-icon w-5 h-5 flex-shrink-0 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+          <div class="faq-answer hidden mt-2 px-4 py-3 rounded-lg text-sm" style="background: rgba(99,102,241,0.05); color: var(--text); border-left: 3px solid var(--primary); margin-left: 20px;">
+            ${aHtml}
+          </div>
+        </div>
+      `;
+    }).join("");
+    wireFAQToggles();
+  }
+
     faqCard.style.display = "";
 
     const wrap = faqCard.querySelector(".space-y-3");
@@ -1581,6 +1684,115 @@
     });
   }
 
+  // ---------- Metier_Pays_Bloc (strict match slug+iso, render only if present) ----------
+  function findKpiBoxByLabel(label){
+    const L = norm(label);
+    const boxes = $all(".kpi-box");
+    for (const box of boxes) {
+      const p = box.querySelector("p");
+      const t = norm(p && p.textContent || "");
+      if (t && t.includes(L)) return box;
+    }
+    return null;
+  }
+  function setKpi(label, value, opts={}){
+    const box = findKpiBoxByLabel(label);
+    if (!box) return false;
+    const ps = box.querySelectorAll("p");
+    if (ps && ps[1]) ps[1].textContent = String(value || "—");
+    if (opts.color && ps && ps[1]) ps[1].style.color = opts.color;
+    return true;
+  }
+  function currencySymbol(code){
+    const c = String(code||"").toUpperCase();
+    if (c === "EUR") return "€";
+    if (c === "USD") return "$";
+    if (c === "GBP") return "£";
+    if (c === "CHF") return "CHF";
+    if (c === "CAD") return "$";
+    return c || "";
+  }
+  function fmtMoneyRange(min, max, cur){
+    const sym = currencySymbol(cur);
+    const a = Number(min);
+    const b = Number(max);
+    const okA = Number.isFinite(a) && a > 0;
+    const okB = Number.isFinite(b) && b > 0;
+    if (okA && okB) return `${Math.round(a).toLocaleString("fr-FR")} - ${Math.round(b).toLocaleString("fr-FR")} ${sym}`.trim();
+    if (okA) return `${Math.round(a).toLocaleString("fr-FR")} ${sym}`.trim();
+    if (okB) return `${Math.round(b).toLocaleString("fr-FR")} ${sym}`.trim();
+    return "—";
+  }
+  function updateSalaryCard(card, b){
+    if (!card) return;
+    const cur = b.Currency || b.currency || "";
+    const jr = fmtMoneyRange(b.salary_junior_min, b.salary_junior_max, cur);
+    const mid = fmtMoneyRange(b.salary_mid_min, b.salary_mid_max, cur);
+    const sr = fmtMoneyRange(b.salary_senior_min, b.salary_senior_max, cur);
+
+    // 3 blocks inside card
+    const blocks = card.querySelectorAll(".space-y-4 > div, .space-y-4 > div > div, .space-y-4 > div");
+    // safer: find progress-label rows (metier pays bloc style card uses .progress-label)
+    const rows = card.querySelectorAll(".progress-label");
+    const ranges = [jr, mid, sr];
+    rows.forEach((row, i)=>{
+      const spans = row.querySelectorAll("span");
+      if (spans && spans[1] && ranges[i]) spans[1].textContent = ranges[i];
+    });
+
+    // Bars: set width roughly based on max senior max
+    const maxBase = Math.max(
+      Number(b.salary_senior_max)||0,
+      Number(b.salary_mid_max)||0,
+      Number(b.salary_junior_max)||0
+    ) || 1;
+    const barFills = card.querySelectorAll(".salary-bar-fill");
+    const maxes = [Number(b.salary_junior_max)||0, Number(b.salary_mid_max)||0, Number(b.salary_senior_max)||0];
+    barFills.forEach((el,i)=>{
+      const w = Math.max(10, Math.min(100, (maxes[i]/maxBase)*100 || 0));
+      el.style.width = `${w}%`;
+    });
+
+    // Notes
+    const notes = String(b.salary_notes || "").trim();
+    const variable = Number(b.salary_variable_share);
+    const infoBox = card.querySelector(".mt-4.p-3.rounded-lg") || card.querySelector(".pt-3.mt-3");
+    if (infoBox) {
+      if (notes || Number.isFinite(variable)) {
+        const parts = [];
+        if (Number.isFinite(variable)) parts.push(`<strong>Variable :</strong> ${variable}%`);
+        if (notes) parts.push(notes);
+        infoBox.innerHTML = `<p class="text-xs font-semibold mb-2" style="color: var(--primary);">💡 Informations complémentaires</p>
+          <div class="text-xs" style="color: var(--text);">${parts.join("<br>")}</div>`;
+        infoBox.style.display = "";
+      } else {
+        infoBox.style.display = "none";
+      }
+    }
+  }
+  function findCardByHeaderIncludes(needle){
+    const n = norm(needle);
+    const hs = $all(".card-header .section-title");
+    for (const h of hs){
+      const t = norm(h.textContent||"");
+      if (t.includes(n)) return h.closest(".card");
+    }
+    return null;
+  }
+  function setCardBodyHtml(card, html){
+    if (!card) return false;
+    const body = card.querySelector(".space-y-4") || card.querySelector(".space-y-3") || card.querySelector(".text-sm") || card;
+    if (!body) return false;
+    body.innerHTML = html;
+    card.style.display = "";
+    return true;
+  }
+  function asHtml(value){
+    const v = String(value||"").trim();
+    if (!v) return "";
+    return /<[a-z][\s\S]*>/i.test(v) ? v : `<p>${escapeHtml(v).replace(/\n/g,"<br>")}</p>`;
+  }
+
   function applyPaysBloc(payload, slug, iso) {
     const bloc0 = findBloc(payload, slug, iso);
     if (!bloc0) return false;
@@ -1590,15 +1802,52 @@
     // Show pays cards only now (since we have the right record)
     showPaysCardsByHeader();
 
-    // Rich sections if present
+    // 1) Rich "main" sections (with IDs in template)
     if (!isEmptyRich(b.acces_bloc)) setRich("acces-title", b.acces_bloc);
     if (!isEmptyRich(b.marche_bloc)) setRich("marche-title", b.marche_bloc);
     if (!isEmptyRich(b.salaire_bloc)) setRich("salaire-title", b.salaire_bloc);
     if (!isEmptyRich(b.formation_bloc)) setRich("formation-title", b.formation_bloc);
 
-    // If those rich sections are empty, keep them hidden (setRich already hides)
+    // 2) KPI sidebar (labels in template)
+    if (b.Remote_level) setKpi("Télétravail", b.Remote_level);
+    if (b.Automation_risk) setKpi("Risque d'automatisation", b.Automation_risk);
+    if (b.Currency) setKpi("Devise", `${String(b.Currency).toUpperCase()} (${currencySymbol(b.Currency)})`.trim());
+    if (b.Time_to_employability) setKpi("Délai d'employabilité", b.Time_to_employability);
+    if (b.Growth_outlook) setKpi("Croissance du marché", b.Growth_outlook);
+    if (b.Market_demand) setKpi("Demande du marché", b.Market_demand);
+
+    // 3) Salary grid sidebar card
+    const salCard = findCardByHeaderIncludes("Grille salariale");
+    if (salCard) updateSalaryCard(salCard, b);
+
+    // 4) Other country-specific cards (best-effort mapping by header text)
+    const mappings = [
+      { header: "Compétences incontournables", key: "Skills_must_have" },
+      { header: "Soft Skills", key: "Soft_skills" },
+      { header: "Stack Technique", key: "Tools_stack" },
+      { header: "Certifications", key: "Certifications" },
+      { header: "Écoles & Parcours", key: "Schools_or_paths" },
+      { header: "Projets Portfolio", key: "Portfolio_projects" },
+      { header: "Secteurs recruteurs", key: "Hiring_sectors" },
+      { header: "Employeurs", key: "Typical_employers" },
+      { header: "Titres de poste", key: "First_job_titles" },
+      { header: "Niveau d'étude", key: "education_level_local" },
+      { header: "Exemples de diplômes", key: "Degrees_examples" },
+      { header: "Taux de croissance", key: "Growth_outlook" },
+      { header: "Demande du marché", key: "Market_demand" },
+      { header: "Équivalences", key: "Equivalences_reconversion" },
+      { header: "Voies d'accès", key: "Entry_routes" },
+    ];
+    for (const m of mappings) {
+      const val = b[m.key];
+      if (isEmptyRich(val)) continue;
+      const card = findCardByHeaderIncludes(m.header);
+      if (card) setCardBodyHtml(card, asHtml(val));
+    }
+
     return true;
   }
+
 
   // ---------- Boot ----------
   async function boot() {
