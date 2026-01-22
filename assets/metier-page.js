@@ -1604,6 +1604,17 @@
   async function boot() {
     const root = ensureRoot();
     renderPlaceholder(root);
+function setReady(){
+  document.documentElement.classList.remove("ul-metier-pending");
+  document.documentElement.classList.add("ul-metier-ready");
+}
+function setPending(){
+  document.documentElement.classList.add("ul-metier-pending");
+  document.documentElement.classList.remove("ul-metier-ready");
+}
+
+// Au tout début du boot (optionnel mais safe)
+setPending();
 
     ensureLink("ulydia-font-outfit", "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap");
     ensureScript("ulydia-tailwind", "https://cdn.tailwindcss.com");
