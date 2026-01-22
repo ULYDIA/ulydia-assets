@@ -157,8 +157,10 @@
 
     console.log("[metier-safe] resolved", { iso, img1, img2 });
 
-    setBanner(wideA || slots.wide, img2, "");
-    setBanner(squareA || slots.square, img1, "");
+// FIX: swap (image_1 is wide, image_2 is square)
+setBanner(wideA || slots.wide, img1, "");
+setBanner(squareA || slots.square, img2, "");
+
 
     console.log("[metier-safe] applied");
   }
