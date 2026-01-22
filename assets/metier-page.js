@@ -1,29 +1,26 @@
-/* metier-page.v11.4.js — Ulydia
+/* metier-page.v11.5.js — Ulydia
    ✅ Propal1 design template (exact HTML)
-   ✅ Filters operational (Pays/Secteur/Metier autocomplete)
-   ✅ Real metier data from Worker (fallbacks if missing)
-   ✅ Sponsor banners + link:
-        - Preview mode via URL params (preview=1 + preview_landscape/square/link/name)
-        - Otherwise resolved from Worker payload if present
-        - Otherwise fallback to country banners from catalog.json
+   ✅ Sponsor logic fixed:
+      - NEVER show placeholder sponsor name (e.g. "École 42") unless real sponsor exists
+      - Real sponsor can come from:
+          A) preview=1 params
+          B) Worker payload metier fields: sponsor_name, sponsor_logo_1, sponsor_logo_2, lien_sponsor
+          C) Worker payload sponsor object (legacy)
+      - If no sponsor => show country fallback banners (from catalog) with CTA to /sponsorship
+   ✅ Hide optional blocks when empty:
+      - Profil recherché, Environnements, Évolutions, etc: hide entire card if no content
+      - FAQ: hide entire FAQ card if no FAQ items
 */
 (() => {
-  if (window.__ULYDIA_METIER_V114__) return;
-  window.__ULYDIA_METIER_V114__ = true;
+  if (window.__ULYDIA_METIER_V115__) return;
+  window.__ULYDIA_METIER_V115__ = true;
 
-  // -----------------------------
-  // CONFIG (keep in sync with your Worker)
-  // -----------------------------
   const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const CATALOG_URL = `${ASSETS_BASE}/catalog.json`;
 
-  // If you already define these globally in <head>, we'll reuse them.
   const WORKER_URL   = (window.ULYDIA_WORKER_URL || "https://ulydia-business.contact-871.workers.dev").replace(/\/$/, "");
-  const PROXY_SECRET = (window.ULYDIA_PROXY_SECRET || "ulydia_2026_proxy_Y4b364u2wsFsQL"); // ok if your worker expects it
+  const PROXY_SECRET = (window.ULYDIA_PROXY_SECRET || "ulydia_2026_proxy_Y4b364u2wsFsQL");
 
-  // -----------------------------
-  // Small utils
-  // -----------------------------
   const $ = (sel, root=document) => root.querySelector(sel);
   const $all = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
@@ -42,14 +39,14 @@
     if (document.getElementById(id)) return;
     const s = document.createElement("script");
     s.id = id; s.src = src; s.async = true;
-    s.onerror = () => console.warn("[metier.v11.4] failed to load", src);
+    s.onerror = () => console.warn("[metier.v11.5] failed to load", src);
     document.head.appendChild(s);
   }
 
   function overlayError(title, err) {
     try {
       const msg = err ? (err.stack || err.message || String(err)) : "";
-      console.error("[metier.v11.4]", title, err);
+      console.error("[metier.v11.5]", title, err);
       let box = document.getElementById("ulydia-metier-error");
       if (!box) {
         box = document.createElement("pre");
@@ -68,12 +65,11 @@
         box.style.font = "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
         document.body.appendChild(box);
       }
-      box.textContent = `[metier-page.v11.4] ${title}\n\n${msg}`;
+      box.textContent = `[metier-page.v11.5] ${title}\n\n${msg}`;
     } catch(_) {}
   }
 
   function qp() { return new URL(location.href).searchParams; }
-
   function getISO() {
     const p = qp();
     const iso = String(p.get("country") || p.get("iso") || "").trim().toUpperCase();
@@ -128,7 +124,6 @@
     el.style.backgroundRepeat = "no-repeat";
     return true;
   }
-
   function getImageRatio(url) {
     return new Promise((resolve) => {
       if (!url) return resolve(0);
@@ -1259,98 +1254,43 @@
  <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9c15a4f745056984',t:'MTc2ODk4NjI2OS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>`;
   }
 
-  // -----------------------------
-  // Data readers (metiers/sectors embedded JSON)
-  // -----------------------------
-  function readJSONScript(id) {
-    const el = document.getElementById(id);
-    if (!el) return null;
-    try { return JSON.parse(el.textContent || "null"); } catch(_) { return null; }
+  // ---------- Optional blocks hide ----------
+  function hideCardByTitleId(titleId) {
+    const h = document.getElementById(titleId);
+    if (!h) return;
+    const card = h.closest(".card") || h.closest("section") || h.parentElement;
+    if (card) card.style.display = "none";
+  }
+  function showCardByTitleId(titleId) {
+    const h = document.getElementById(titleId);
+    if (!h) return;
+    const card = h.closest(".card") || h.closest("section") || h.parentElement;
+    if (card) card.style.display = "";
+  }
+  function isEmptyRich(v) {
+    if (v === undefined || v === null) return true;
+    if (Array.isArray(v)) return v.length === 0;
+    const s = String(v).replace(/\s+/g, " ").trim();
+    if (!s) return true;
+    // if HTML but only tags/spaces
+    const stripped = s.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+    return !stripped;
   }
 
-  function normalizeItem(x) {
-    const f = x?.fieldData || x?.fields || x || {};
-    const slug = String(x?.slug || f.slug || f.Slug || "").trim();
-    const name = String(f.nom || f.name || f["Nom"] || f["Name"] || f.titre || f.title || slug).trim();
-    const secteur = String(f.secteur || f.secteur_activite || f["Secteur d’activité"] || f["Secteur d'activite"] || f.sector || "").trim();
-    return { slug, name, secteur };
-  }
-
-  // -----------------------------
-  // Worker: fetch metier payload (real content + sponsor)
-  // -----------------------------
+  // ---------- Worker payload ----------
   async function fetchMetierPayload({ iso, slug }) {
     if (!slug) return null;
     const url = new URL(`${WORKER_URL}/v1/metier-page`);
     url.searchParams.set("iso", iso);
     url.searchParams.set("slug", slug);
-    // pass proxy secret if your worker expects it
     url.searchParams.set("proxy_secret", PROXY_SECRET);
-
     return fetchJSON(url.toString()).catch((e) => {
-      console.warn("[metier.v11.4] worker payload failed", e);
+      console.warn("[metier.v11.5] worker payload failed", e);
       return null;
     });
   }
 
-  // -----------------------------
-  // Apply content into template
-  // -----------------------------
-  function setText(id, txt) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = (txt === undefined || txt === null) ? "" : String(txt);
-  }
-
-  function sectionContentNode(titleId) {
-    const h = document.getElementById(titleId);
-    if (!h) return null;
-    const card = h.closest(".card");
-    if (!card) return null;
-    // usually .rich-content inside the card
-    return card.querySelector(".rich-content") || card.querySelector(".space-y-4") || card;
-  }
-
-  function setRich(titleId, htmlOrText) {
-    const node = sectionContentNode(titleId);
-    if (!node) return;
-    if (Array.isArray(htmlOrText)) {
-      node.innerHTML = `<ul>${htmlOrText.map(li => `<li>${escapeHtml(String(li))}</li>`).join("")}</ul>`;
-      return;
-    }
-    const s = (htmlOrText === undefined || htmlOrText === null) ? "" : String(htmlOrText);
-    // if looks like html, accept; else paragraph
-    if (/<[a-z][\s\S]*>/i.test(s)) node.innerHTML = s;
-    else node.innerHTML = `<p>${escapeHtml(s).replace(/\n+/g, "<br/>")}</p>`;
-  }
-
-  function escapeHtml(s) {
-    return s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
-  }
-
-  function wireFAQToggles() {
-    $all(".faq-question").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const item = btn.closest(".faq-item");
-        if (!item) return;
-        const ans = $(".faq-answer", item);
-        const icon = $(".faq-icon", item);
-        if (!ans) return;
-        const open = !ans.classList.contains("hidden");
-        if (open) {
-          ans.classList.add("hidden");
-          if (icon) icon.style.transform = "rotate(0deg)";
-        } else {
-          ans.classList.remove("hidden");
-          if (icon) icon.style.transform = "rotate(180deg)";
-        }
-      });
-    });
-  }
-
-  // -----------------------------
-  // Sponsor banners (preview -> worker -> country fallback)
-  // -----------------------------
+  // ---------- Sponsor logic ----------
   async function resolveCountryBanners(iso) {
     const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`).catch(() => null);
     const countries = data?.countries || [];
@@ -1365,227 +1305,212 @@
     return { wide, square, cta };
   }
 
+  function clearSponsorName() {
+    const nameBanner = document.getElementById("sponsor-name-banner");
+    const nameSide = document.getElementById("sponsor-name-sidebar");
+    if (nameBanner) nameBanner.textContent = "";
+    if (nameSide) nameSide.textContent = "";
+  }
+
+  function applySponsorToDOM({ wideUrl, squareUrl, linkUrl, sponsorName }) {
+    const wideA = document.getElementById("sponsor-banner-link");
+    const logoA = document.getElementById("sponsor-logo-link");
+    const logoBox = logoA ? logoA.querySelector(".sponsor-logo-square") : null;
+    const ctaBtn = document.getElementById("sponsor-cta") || document.getElementById("sponsor-cta-btn");
+    const nameBanner = document.getElementById("sponsor-name-banner");
+    const nameSide = document.getElementById("sponsor-name-sidebar");
+
+    if (wideA && wideUrl) setBg(wideA, wideUrl);
+    if (logoBox && squareUrl) {
+      setBg(logoBox, squareUrl);
+      const svg = logoBox.querySelector("svg");
+      if (svg) svg.style.display = "none";
+    }
+
+    if (linkUrl) {
+      if (wideA) wideA.href = linkUrl;
+      if (logoA) logoA.href = linkUrl;
+      if (ctaBtn) ctaBtn.href = linkUrl;
+    }
+
+    if (sponsorName) {
+      if (nameBanner) nameBanner.textContent = sponsorName;
+      if (nameSide) nameSide.textContent = sponsorName;
+    } else {
+      clearSponsorName();
+    }
+  }
+
   async function applySponsor({ iso, slug, payload }) {
     const p = qp();
     const isPreview = String(p.get("preview") || "") === "1";
 
-    // slots
-    const wideA = document.getElementById("sponsor-banner-link");
-    const nameBanner = document.getElementById("sponsor-name-banner");
-    const nameSide = document.getElementById("sponsor-name-sidebar");
-    const logoA = document.getElementById("sponsor-logo-link");
-    const logoBox = logoA ? logoA.querySelector(".sponsor-logo-square") : null;
-    const ctaBtn = document.getElementById("sponsor-cta") || document.getElementById("sponsor-cta-btn");
+    // Always start by clearing placeholder sponsor name from template
+    clearSponsorName();
 
-    // 1) PREVIEW (highest priority)
+    // 1) Preview
     if (isPreview) {
       const wide = decodeURIComponent(String(p.get("preview_landscape") || p.get("preview_wide") || "").trim());
       const square = decodeURIComponent(String(p.get("preview_square") || "").trim());
       const link = decodeURIComponent(String(p.get("preview_link") || "").trim());
       const sname = decodeURIComponent(String(p.get("preview_name") || "").trim());
-
-      if (wideA && wide) setBg(wideA, wide);
-      if (logoBox && square) {
-        setBg(logoBox, square);
-        const svg = logoBox.querySelector("svg");
-        if (svg) svg.style.display = "none";
-      }
-      if (link) {
-        if (wideA) wideA.href = link;
-        if (logoA) logoA.href = link;
-        if (ctaBtn) ctaBtn.href = link;
-      }
-      if (sname) {
-        if (nameBanner) nameBanner.textContent = sname;
-        if (nameSide) nameSide.textContent = sname;
-      }
+      applySponsorToDOM({ wideUrl: wide, squareUrl: square, linkUrl: link, sponsorName: sname });
       return;
     }
 
-    // 2) WORKER SPONSOR (if metier sponsored in this iso)
+    // 2) Real sponsor from metier fields (Webflow collection field names)
+    const m = payload?.metier || payload?.job || payload?.item || payload || {};
+    const f = m?.fieldData || m?.fields || m || {};
+
+    const wfName = String(f.sponsor_name || f["sponsor_name"] || f["Sponsor name"] || f["Sponsor Name"] || "").trim();
+    const wfLink = String(
+      f.lien_sponsor?.url || f.lien_sponsor?.href || f.lien_sponsor ||
+      f["lien_sponsor"]?.url || f["lien_sponsor"]?.href || f["lien_sponsor"] ||
+      f["Lien sponsor"] || ""
+    ).trim();
+
+    const wf1 = pickUrl(f.sponsor_logo_1 || f["sponsor_logo_1"] || f["Sponsor logo 1"]);
+    const wf2 = pickUrl(f.sponsor_logo_2 || f["sponsor_logo_2"] || f["Sponsor logo 2"]);
+
+    // Sometimes wide/square are swapped -> detect by ratio when both exist
+    if (wf1 || wf2 || wfLink || wfName) {
+      let wideUrl = wf2, squareUrl = wf1; // expected: logo_2=wide, logo_1=square
+      if (wf1 && wf2) {
+        const [r1, r2] = await Promise.all([getImageRatio(wf1), getImageRatio(wf2)]);
+        // wide is the higher ratio
+        if (r1 > r2) { wideUrl = wf1; squareUrl = wf2; }
+        else { wideUrl = wf2; squareUrl = wf1; }
+      } else {
+        // if only one image, put it as wide (best UX)
+        if (wf1 && !wf2) wideUrl = wf1;
+        if (wf2 && !wf1) wideUrl = wf2;
+      }
+
+      applySponsorToDOM({ wideUrl, squareUrl, linkUrl: wfLink, sponsorName: wfName });
+      return;
+    }
+
+    // 3) Legacy sponsor object
     const sponsor = payload?.sponsor || payload?.metier?.sponsor || null;
     const sWide = pickUrl(sponsor?.logo_2 || sponsor?.wide || sponsor?.banner_wide || sponsor?.image_wide);
     const sSquare = pickUrl(sponsor?.logo_1 || sponsor?.square || sponsor?.logo_square || sponsor?.image_square);
     const sLink = String(sponsor?.link || sponsor?.url || sponsor?.website || "").trim();
     const sName = String(sponsor?.name || sponsor?.nom || sponsor?.company || "").trim();
-
     if (sWide || sSquare || sLink || sName) {
-      if (wideA && sWide) setBg(wideA, sWide);
-      if (logoBox && sSquare) {
-        setBg(logoBox, sSquare);
-        const svg = logoBox.querySelector("svg");
-        if (svg) svg.style.display = "none";
-      }
-      if (sLink) {
-        if (wideA) wideA.href = sLink;
-        if (logoA) logoA.href = sLink;
-        if (ctaBtn) ctaBtn.href = sLink;
-      }
-      if (sName) {
-        if (nameBanner) nameBanner.textContent = sName;
-        if (nameSide) nameSide.textContent = sName;
-      }
+      applySponsorToDOM({ wideUrl: sWide, squareUrl: sSquare, linkUrl: sLink, sponsorName: sName });
       return;
     }
 
-    // 3) COUNTRY FALLBACK
+    // 4) Country fallback (NO sponsor name!)
     const fb = await resolveCountryBanners(iso);
-    if (wideA && fb.wide) setBg(wideA, fb.wide);
-    if (logoBox && fb.square) {
-      setBg(logoBox, fb.square);
-      const svg = logoBox.querySelector("svg");
-      if (svg) svg.style.display = "none";
-    }
-    // default CTA target (your sponsorship page)
     const fallbackLink = `/sponsorship?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
-    if (wideA) wideA.href = fallbackLink;
-    if (logoA) logoA.href = fallbackLink;
-    if (ctaBtn) ctaBtn.href = fallbackLink;
+
+    applySponsorToDOM({ wideUrl: fb.wide, squareUrl: fb.square, linkUrl: fallbackLink, sponsorName: "" });
+
+    const ctaBtn = document.getElementById("sponsor-cta") || document.getElementById("sponsor-cta-btn");
     if (fb.cta && ctaBtn) ctaBtn.textContent = fb.cta;
   }
 
-  // -----------------------------
-  // Filters
-  // -----------------------------
-  async function initFilters({ iso, slug }) {
-    const paysSel = document.getElementById("filter-pays");
-    const secSel  = document.getElementById("filter-secteur");
-    const metInp  = document.getElementById("filter-metier");
-    const suggBox = document.getElementById("metier-suggestions");
-    const resetBtn = document.getElementById("reset-filters");
-    const countEl = document.getElementById("result-count");
-
-    // Countries from catalog
-    let countries = [];
-    try {
-      const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`);
-      countries = (data?.countries || []).map(c => ({
-        iso: String(c.iso || "").toUpperCase(),
-        label: String(c.label || c.name || c.slug || c.iso || "").trim()
-      })).filter(x => x.iso && x.label);
-      countries.sort((a,b) => a.label.localeCompare(b.label, "fr"));
-    } catch (e) {
-      console.warn("[metier.v11.4] catalog countries failed", e);
-    }
-
-    if (paysSel && countries.length) {
-      paysSel.innerHTML = countries.map(c => `<option value="${escapeHtml(c.iso)}">${escapeHtml(c.label)}</option>`).join("");
-      paysSel.value = iso;
-    }
-
-    // Sectors + metiers from embedded JSON (metiersData / sectorsData)
-    const metiersRaw = readJSONScript("metiersData") || window.__ULYDIA_METIERS__ || [];
-    const sectorsRaw = readJSONScript("sectorsData") || window.__ULYDIA_SECTEURS__ || [];
-
-    const metiers = (Array.isArray(metiersRaw) ? metiersRaw : []).map(normalizeItem).filter(x => x.slug && x.name);
-    const sectors = (Array.isArray(sectorsRaw) ? sectorsRaw : []).map(s => {
-      const f = s?.fieldData || s?.fields || s || {};
-      return String(f.nom || f.name || f.titre || f.title || f.slug || "").trim();
-    }).filter(Boolean);
-
-    // Sector dropdown
-    if (secSel) {
-      const opts = [`<option value="">Tous les secteurs</option>`]
-        .concat(sectors.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`));
-      secSel.innerHTML = opts.join("");
-    }
-
-    function currentSector() {
-      return secSel ? String(secSel.value || "").trim() : "";
-    }
-
-    function filterMetiers(q) {
-      const qq = String(q || "").toLowerCase().trim();
-      const sec = currentSector();
-      return metiers.filter(m => {
-        const okQ = !qq || m.name.toLowerCase().includes(qq) || m.slug.toLowerCase().includes(qq);
-        const okS = !sec || (m.secteur && m.secteur === sec);
-        return okQ && okS;
-      }).slice(0, 25);
-    }
-
-    function renderSuggestions(list) {
-      if (!suggBox) return;
-      if (!list.length) { suggBox.classList.add("hidden"); suggBox.innerHTML = ""; return; }
-      suggBox.innerHTML = list.map(m => `
-        <button type="button" data-slug="${escapeHtml(m.slug)}"
-          style="display:block;width:100%;text-align:left;padding:10px 12px;background:white;border-bottom:1px solid rgba(0,0,0,.06);">
-          <div style="font-weight:700;font-size:13px;color:#111827">${escapeHtml(m.name)}</div>
-          <div style="font-size:12px;color:#6b7280">${escapeHtml(m.slug)}</div>
-        </button>
-      `).join("");
-      suggBox.classList.remove("hidden");
-
-      $all("button[data-slug]", suggBox).forEach(b => {
-        b.addEventListener("click", () => {
-          const s = b.getAttribute("data-slug") || "";
-          const cISO = paysSel ? String(paysSel.value || iso) : iso;
-          const url = new URL(location.href);
-          url.searchParams.set("metier", s);
-          url.searchParams.set("slug", s);
-          url.searchParams.set("country", cISO);
-          url.searchParams.delete("preview");
-          location.href = url.toString();
-        });
-      });
-    }
-
-    function updateCount() {
-      if (!countEl) return;
-      const list = filterMetiers(metInp ? metInp.value : "");
-      countEl.textContent = String(list.length || 0);
-    }
-
-    // Events
-    if (metInp) {
-      metInp.addEventListener("input", () => {
-        renderSuggestions(filterMetiers(metInp.value));
-        updateCount();
-      });
-      metInp.addEventListener("focus", () => renderSuggestions(filterMetiers(metInp.value)));
-      document.addEventListener("click", (e) => {
-        if (!suggBox) return;
-        if (e.target === metInp || suggBox.contains(e.target)) return;
-        suggBox.classList.add("hidden");
-      });
-    }
-
-    if (secSel) {
-      secSel.addEventListener("change", () => {
-        if (metInp) renderSuggestions(filterMetiers(metInp.value));
-        updateCount();
-      });
-    }
-
-    if (paysSel) {
-      paysSel.addEventListener("change", () => {
-        const cISO = String(paysSel.value || "").trim();
-        const url = new URL(location.href);
-        url.searchParams.set("country", cISO);
-        url.searchParams.set("iso", cISO);
-        location.href = url.toString();
-      });
-    }
-
-    if (resetBtn) {
-      resetBtn.addEventListener("click", () => {
-        const url = new URL(location.href);
-        const cISO = paysSel ? String(paysSel.value || iso) : iso;
-        url.searchParams.set("country", cISO);
-        url.searchParams.set("iso", cISO);
-        url.searchParams.delete("metier");
-        url.searchParams.delete("slug");
-        url.searchParams.delete("preview");
-        location.href = url.toString();
-      });
-    }
-
-    updateCount();
+  // ---------- Content mapping ----------
+  function setText(id, txt) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = (txt === undefined || txt === null) ? "" : String(txt);
   }
 
-  // -----------------------------
-  // Boot
-  // -----------------------------
+  function sectionContentNode(titleId) {
+    const h = document.getElementById(titleId);
+    if (!h) return null;
+    const card = h.closest(".card");
+    if (!card) return null;
+    return card.querySelector(".rich-content") || card.querySelector(".space-y-4") || card;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  }
+
+  function setRich(titleId, htmlOrText) {
+    const node = sectionContentNode(titleId);
+    if (!node) return;
+    if (isEmptyRich(htmlOrText)) {
+      hideCardByTitleId(titleId);
+      return;
+    }
+    showCardByTitleId(titleId);
+
+    if (Array.isArray(htmlOrText)) {
+      node.innerHTML = `<ul>${htmlOrText.map(li => `<li>${escapeHtml(String(li))}</li>`).join("")}</ul>`;
+      return;
+    }
+    const s = String(htmlOrText);
+    if (/<[a-z][\s\S]*>/i.test(s)) node.innerHTML = s;
+    else node.innerHTML = `<p>${escapeHtml(s).replace(/\n+/g, "<br/>")}</p>`;
+  }
+
+  function wireFAQToggles() {
+    $all(".faq-question").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const item = btn.closest(".faq-item");
+        if (!item) return;
+        const ans = $(".faq-answer", item);
+        const icon = $(".faq-icon", item);
+        if (!ans) return;
+        const open = !ans.classList.contains("hidden");
+        if (open) { ans.classList.add("hidden"); if (icon) icon.style.transform = "rotate(0deg)"; }
+        else { ans.classList.remove("hidden"); if (icon) icon.style.transform = "rotate(180deg)"; }
+      });
+    });
+  }
+
+  function applyFAQFromPayload(payload) {
+    const m = payload?.metier || payload?.job || payload?.item || payload || {};
+    const f = m?.fieldData || m?.fields || m || {};
+    const faqArr = payload?.faq || m?.faq || payload?.faqs || null;
+
+    // If you later fetch FAQ collection separately, you can set payload.faq = [{question, answer},...]
+    const list = Array.isArray(faqArr) ? faqArr : [];
+
+    // Find FAQ card by title id in template (it exists)
+    const faqTitle = document.getElementById("faq-title");
+    const faqCard = faqTitle ? (faqTitle.closest(".card") || faqTitle.closest("section")) : null;
+    const faqWrap = faqCard ? faqCard.querySelector(".space-y-3") : null;
+
+    if (!faqCard || !faqWrap) return;
+
+    if (!list.length) {
+      faqCard.style.display = "none";
+      return;
+    }
+
+    faqCard.style.display = "";
+    faqWrap.innerHTML = list.map(item => {
+      const q = String(item.question || item.q || item["Question"] || "").trim();
+      const a = String(item.answer || item.a || item["Réponse"] || item["Reponse"] || "").trim();
+      const qSafe = escapeHtml(q || "—");
+      const aHtml = /<[a-z][\s\S]*>/i.test(a) ? a : `<p>${escapeHtml(a)}</p>`;
+      return `
+        <div class="faq-item">
+          <button class="faq-question w-full text-left p-4 rounded-lg transition-all flex items-start justify-between gap-3" style="background: white; border: 2px solid var(--border);">
+            <div class="flex items-start gap-3 flex-1">
+              <span class="text-xl flex-shrink-0">❓</span>
+              <span class="font-semibold text-sm" style="color: var(--text);">${qSafe}</span>
+            </div>
+            <svg class="faq-icon w-5 h-5 flex-shrink-0 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+          <div class="faq-answer hidden mt-2 px-4 py-3 rounded-lg text-sm" style="background: rgba(99,102,241,0.05); color: var(--text); border-left: 3px solid var(--primary); margin-left: 20px;">
+            ${aHtml}
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    wireFAQToggles();
+  }
+
+  // ---------- Boot ----------
   async function boot() {
     const root = ensureRoot();
     renderPlaceholder(root);
@@ -1937,73 +1862,42 @@
 
     const iso = getISO();
     const slug = getSlug();
+    console.log("[metier-page] v11.5 boot", { iso, slug });
 
-    console.log("[metier-page] v11.4 boot", { iso, slug });
+    try { renderShell(root); }
+    catch (e) { overlayError("Render shell failed", e); return; }
 
-    try {
-      renderShell(root);
-    } catch (e) {
-      overlayError("Render shell failed", e);
-      return;
-    }
-
-    // Filters now that DOM exists
-    initFilters({ iso, slug }).catch(e => overlayError("Init filters failed", e));
-
-    // Fetch real metier payload
+    // Fetch real metier payload (includes sponsor fields if any)
     const payload = await fetchMetierPayload({ iso, slug });
 
-    // Apply sponsor & link (preview -> worker -> country fallback)
+    // Sponsor (and link)
     applySponsor({ iso, slug, payload }).catch(e => overlayError("Apply sponsor failed", e));
 
-    // Apply real metier content
-    const m = payload?.metier || payload?.job || null;
+    // Content mapping (prefer Webflow field names)
+    const m = payload?.metier || payload?.job || payload?.item || payload || null;
+    const f = m ? (m.fieldData || m.fields || m) : {};
     if (m) {
-      setText("nom-metier", m.name || m.nom || m.title || slug);
-      setText("accroche-metier", m.accroche || m.tagline || m.subtitle || m.summary || "");
+      setText("nom-metier", f.Nom || f.nom || f.title || f.name || slug);
+      setText("accroche-metier", f.accroche || f.tagline || f.subtitle || f.summary || "");
 
-      // Main sections (robust keys)
-      setRich("description-title", m.description || m.overview || m.vue_ensemble || "");
-      setRich("missions-title", m.missions || m.missions_principales || m.tasks || []);
-      setRich("competences-title", m.competences || m.skills || []);
-      setRich("environnements-title", m.environnements || m.work_environment || "");
-      setRich("profil-title", m.profil || m.profile || "");
-      setRich("evolutions-title", m.evolutions || m.career_path || "");
+      // These title IDs come from propal template
+      setRich("description-title", f.description || f.vue_ensemble || f.overview || "");
+      setRich("missions-title", f.missions || f.missions_principales || f.tasks || "");
+      setRich("competences-title", f["Compétences"] || f.competences || f.skills || "");
+      setRich("environnements-title", f.environnements || f.work_environment || "");
+      setRich("profil-title", f.profil_recherche || f.profil || f.profile || "");
+      setRich("evolutions-title", f.evolutions_possibles || f.evolutions || f.career_path || "");
 
-      // Optional FAQ if provided (array of {q,a})
-      if (Array.isArray(m.faq) && m.faq.length) {
-        const faqWrap = document.getElementById("faq-title")?.closest(".card")?.querySelector(".space-y-3");
-        if (faqWrap) {
-          faqWrap.innerHTML = m.faq.map(item => {
-            const q = escapeHtml(String(item.q || item.question || "").trim());
-            const a = String(item.a || item.answer || "").trim();
-            const aHtml = /<[a-z][\s\S]*>/i.test(a) ? a : `<p>${escapeHtml(a)}</p>`;
-            return `
-              <div class="faq-item">
-                <button class="faq-question w-full text-left p-4 rounded-lg transition-all flex items-start justify-between gap-3" style="background: white; border: 2px solid var(--border);">
-                  <div class="flex items-start gap-3 flex-1">
-                    <span class="text-xl flex-shrink-0">❓</span>
-                    <span class="font-semibold text-sm" style="color: var(--text);">${q}</span>
-                  </div>
-                  <svg class="faq-icon w-5 h-5 flex-shrink-0 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </button>
-                <div class="faq-answer hidden mt-2 px-4 py-3 rounded-lg text-sm" style="background: rgba(99,102,241,0.05); color: var(--text); border-left: 3px solid var(--primary); margin-left: 20px;">
-                  ${aHtml}
-                </div>
-              </div>
-            `;
-          }).join("");
-        }
-      }
+      // If you later add metier_pays_bloc, map those here; otherwise cards will hide if empty.
     } else {
-      // still set the slug so user sees something
-      if (slug) setText("nom-metier", slug.replace(/-/g, " "));
+      // If no payload, hide optional cards (avoid empty design)
+      hideCardByTitleId("profil-title");
+      hideCardByTitleId("environnements-title");
+      hideCardByTitleId("evolutions-title");
     }
 
-    // FAQ toggles
-    wireFAQToggles();
+    // FAQ (hide if none)
+    applyFAQFromPayload(payload || {});
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
