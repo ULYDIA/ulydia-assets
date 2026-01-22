@@ -1,14 +1,11 @@
-/* metier-page.v11.2.js — Ulydia (ULTRA-SAFE)
-   - Renders immediately (shows a visible placeholder right away)
-   - Uses propal1 HTML as template (same design target)
-   - Loads Tailwind CDN in background (does NOT block render)
-   - Adds an on-page error overlay if anything fails (no more “silent white screen”)
-   - Applies country banners from /assets/catalog.json
-   - Auto-detect wide vs square by ratio (prevents inversion)
+/* metier-page.v11.3.js — Ulydia (ULTRA-SAFE + FIX)
+   FIX: propal HTML contained ${...} sequences -> were evaluated by JS template literal and crashed render.
+        We now escape ${ into \${} so HTML renders correctly.
+   Also: error overlay shows the actual exception message.
 */
 (() => {
-  if (window.__ULYDIA_METIER_V112__) return;
-  window.__ULYDIA_METIER_V112__ = true;
+  if (window.__ULYDIA_METIER_V113__) return;
+  window.__ULYDIA_METIER_V113__ = true;
 
   const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const CATALOG_URL = `${ASSETS_BASE}/catalog.json`;
@@ -34,14 +31,14 @@
     if (document.getElementById(id)) return;
     const s = document.createElement("script");
     s.id = id; s.src = src; s.async = true;
-    s.onerror = () => console.warn("[metier.v11.2] failed to load", src);
+    s.onerror = () => console.warn("[metier.v11.3] failed to load", src);
     document.head.appendChild(s);
   }
 
   function overlayError(title, err) {
     try {
-      const msg = (err && (err.stack || err.message)) ? (err.stack || err.message) : String(err || "");
-      console.error("[metier.v11.2]", title, err);
+      const msg = err ? (err.stack || err.message || String(err)) : "";
+      console.error("[metier.v11.3]", title, err);
 
       let box = document.getElementById("ulydia-metier-error");
       if (!box) {
@@ -61,7 +58,7 @@
         box.style.font = "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
         document.body.appendChild(box);
       }
-      box.textContent = `[metier-page.v11.2] ${title}\n\n${msg}`;
+      box.textContent = `[metier-page.v11.3] ${title}\n\n${msg}`;
     } catch(_) {}
   }
 
@@ -146,7 +143,6 @@
   }
 
   function renderPlaceholder(root) {
-    // Visible even if CSS/Tailwind fails
     root.innerHTML = `
       <div style="padding:16px;font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial">
         <div style="display:flex;align-items:center;gap:10px">
@@ -969,10 +965,10 @@
       }
       
       suggestionsContainer.innerHTML = metiers.map(metier => \`
-        <div class="suggestion-item px-4 py-3 cursor-pointer transition-all hover:bg-gray-50 text-sm font-medium" style="color: var(--text); border-bottom: 1px solid var(--border);" data-metier="${metier.nom}">
+        <div class="suggestion-item px-4 py-3 cursor-pointer transition-all hover:bg-gray-50 text-sm font-medium" style="color: var(--text); border-bottom: 1px solid var(--border);" data-metier="\${metier.nom}">
           <div class="flex items-center justify-between">
-            <span>${metier.nom}</span>
-            <span class="text-xs px-2 py-1 rounded" style="background: rgba(99,102,241,0.1); color: var(--primary);">${getSecteurLabel(metier.secteur)}</span>
+            <span>\${metier.nom}</span>
+            <span class="text-xs px-2 py-1 rounded" style="background: rgba(99,102,241,0.1); color: var(--primary);">\${getSecteurLabel(metier.secteur)}</span>
           </div>
         </div>
       \`).join('');
@@ -1163,12 +1159,12 @@
       
       // Apply font
       const customFont = config.font_family || defaultConfig.font_family;
-      document.documentElement.style.setProperty('--font-family', \`'${customFont}', sans-serif\`);
+      document.documentElement.style.setProperty('--font-family', \`'\${customFont}', sans-serif\`);
       
       // Apply font size
       const baseSize = config.font_size || defaultConfig.font_size;
-      document.documentElement.style.setProperty('--font-base', \`${baseSize}px\`);
-      document.body.style.fontSize = \`${baseSize}px\`;
+      document.documentElement.style.setProperty('--font-base', \`\${baseSize}px\`);
+      document.body.style.fontSize = \`\${baseSize}px\`;
     }
     
     function mapToCapabilities(config) {
@@ -1273,7 +1269,6 @@
     const wideUrl = (r1 >= r2) ? u1 : u2;
     const squareUrl = (r1 >= r2) ? u2 : u1;
 
-    // propal slots:
     const wideA = document.getElementById("sponsor-banner-link");
     if (wideA) setBg(wideA, wideUrl);
 
@@ -1301,7 +1296,6 @@
     const root = ensureRoot();
     renderPlaceholder(root);
 
-    // Load assets (non-blocking)
     ensureLink("ulydia-font-outfit", "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap");
     ensureScript("ulydia-tailwind", "https://cdn.tailwindcss.com");
     ensureStyle("ulydia-propal-style", `body {
@@ -1649,7 +1643,7 @@
 
     const iso = detectISO();
     const slug = detectSlug();
-    console.log("[metier-page] v11.2 boot", { iso, slug });
+    console.log("[metier-page] v11.3 boot", { iso, slug });
 
     try {
       renderShell(root);
@@ -1659,7 +1653,6 @@
     }
 
     patchDebugBox(iso, slug);
-
     applyBannersForISO(iso).catch(e => overlayError("Apply banners failed", e));
   }
 
