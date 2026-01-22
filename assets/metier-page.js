@@ -1,14 +1,31 @@
-/* metier-page.v11.3.js — Ulydia (ULTRA-SAFE + FIX)
-   FIX: propal HTML contained ${...} sequences -> were evaluated by JS template literal and crashed render.
-        We now escape ${ into \${} so HTML renders correctly.
-   Also: error overlay shows the actual exception message.
+/* metier-page.v11.4.js — Ulydia
+   ✅ Propal1 design template (exact HTML)
+   ✅ Filters operational (Pays/Secteur/Metier autocomplete)
+   ✅ Real metier data from Worker (fallbacks if missing)
+   ✅ Sponsor banners + link:
+        - Preview mode via URL params (preview=1 + preview_landscape/square/link/name)
+        - Otherwise resolved from Worker payload if present
+        - Otherwise fallback to country banners from catalog.json
 */
 (() => {
-  if (window.__ULYDIA_METIER_V113__) return;
-  window.__ULYDIA_METIER_V113__ = true;
+  if (window.__ULYDIA_METIER_V114__) return;
+  window.__ULYDIA_METIER_V114__ = true;
 
+  // -----------------------------
+  // CONFIG (keep in sync with your Worker)
+  // -----------------------------
   const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const CATALOG_URL = `${ASSETS_BASE}/catalog.json`;
+
+  // If you already define these globally in <head>, we'll reuse them.
+  const WORKER_URL   = (window.ULYDIA_WORKER_URL || "https://ulydia-business.contact-871.workers.dev").replace(/\/$/, "");
+  const PROXY_SECRET = (window.ULYDIA_PROXY_SECRET || "ulydia_2026_proxy_Y4b364u2wsFsQL"); // ok if your worker expects it
+
+  // -----------------------------
+  // Small utils
+  // -----------------------------
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $all = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
   function ensureLink(id, href) {
     if (document.getElementById(id)) return;
@@ -16,30 +33,23 @@
     l.id = id; l.rel = "stylesheet"; l.href = href;
     document.head.appendChild(l);
   }
-
   function ensureStyle(id, cssText) {
     let st = document.getElementById(id);
-    if (!st) {
-      st = document.createElement("style");
-      st.id = id;
-      document.head.appendChild(st);
-    }
+    if (!st) { st = document.createElement("style"); st.id = id; document.head.appendChild(st); }
     if (!st.textContent || st.textContent.length < 50) st.textContent = cssText;
   }
-
   function ensureScript(id, src) {
     if (document.getElementById(id)) return;
     const s = document.createElement("script");
     s.id = id; s.src = src; s.async = true;
-    s.onerror = () => console.warn("[metier.v11.3] failed to load", src);
+    s.onerror = () => console.warn("[metier.v11.4] failed to load", src);
     document.head.appendChild(s);
   }
 
   function overlayError(title, err) {
     try {
       const msg = err ? (err.stack || err.message || String(err)) : "";
-      console.error("[metier.v11.3]", title, err);
-
+      console.error("[metier.v11.4]", title, err);
       let box = document.getElementById("ulydia-metier-error");
       if (!box) {
         box = document.createElement("pre");
@@ -58,19 +68,20 @@
         box.style.font = "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
         document.body.appendChild(box);
       }
-      box.textContent = `[metier-page.v11.3] ${title}\n\n${msg}`;
+      box.textContent = `[metier-page.v11.4] ${title}\n\n${msg}`;
     } catch(_) {}
   }
 
-  function detectISO() {
-    const u = new URL(location.href);
-    const iso = String(u.searchParams.get("iso") || "").trim().toUpperCase();
+  function qp() { return new URL(location.href).searchParams; }
+
+  function getISO() {
+    const p = qp();
+    const iso = String(p.get("country") || p.get("iso") || "").trim().toUpperCase();
     return iso || "FR";
   }
-
-  function detectSlug() {
-    const u = new URL(location.href);
-    return String(u.searchParams.get("slug") || "").trim();
+  function getSlug() {
+    const p = qp();
+    return String(p.get("metier") || p.get("slug") || "").trim();
   }
 
   function pickFirst(...vals) {
@@ -82,15 +93,11 @@
     }
     return "";
   }
-
   function pickUrl(v) {
     if (!v) return "";
     if (typeof v === "string") return v.trim();
     if (Array.isArray(v)) {
-      for (const it of v) {
-        const u = pickUrl(it);
-        if (u) return u;
-      }
+      for (const it of v) { const u = pickUrl(it); if (u) return u; }
       return "";
     }
     if (typeof v === "object") {
@@ -104,8 +111,8 @@
     return "";
   }
 
-  async function fetchJSON(url) {
-    const res = await fetch(url, { cache: "no-store" });
+  async function fetchJSON(url, opt={}) {
+    const res = await fetch(url, { cache: "no-store", ...opt });
     if (!res.ok) {
       const t = await res.text().catch(() => "");
       throw new Error(`Fetch failed ${res.status} for ${url} :: ${t.slice(0,160)}`);
@@ -134,11 +141,7 @@
 
   function ensureRoot() {
     let root = document.getElementById("ulydia-metier-root");
-    if (!root) {
-      root = document.createElement("div");
-      root.id = "ulydia-metier-root";
-      document.body.prepend(root);
-    }
+    if (!root) { root = document.createElement("div"); root.id = "ulydia-metier-root"; document.body.prepend(root); }
     return root;
   }
 
@@ -1256,43 +1259,334 @@
  <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9c15a4f745056984',t:'MTc2ODk4NjI2OS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>`;
   }
 
-  async function applyBannersForISO(iso) {
-    const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`);
+  // -----------------------------
+  // Data readers (metiers/sectors embedded JSON)
+  // -----------------------------
+  function readJSONScript(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    try { return JSON.parse(el.textContent || "null"); } catch(_) { return null; }
+  }
+
+  function normalizeItem(x) {
+    const f = x?.fieldData || x?.fields || x || {};
+    const slug = String(x?.slug || f.slug || f.Slug || "").trim();
+    const name = String(f.nom || f.name || f["Nom"] || f["Name"] || f.titre || f.title || slug).trim();
+    const secteur = String(f.secteur || f.secteur_activite || f["Secteur d’activité"] || f["Secteur d'activite"] || f.sector || "").trim();
+    return { slug, name, secteur };
+  }
+
+  // -----------------------------
+  // Worker: fetch metier payload (real content + sponsor)
+  // -----------------------------
+  async function fetchMetierPayload({ iso, slug }) {
+    if (!slug) return null;
+    const url = new URL(`${WORKER_URL}/v1/metier-page`);
+    url.searchParams.set("iso", iso);
+    url.searchParams.set("slug", slug);
+    // pass proxy secret if your worker expects it
+    url.searchParams.set("proxy_secret", PROXY_SECRET);
+
+    return fetchJSON(url.toString()).catch((e) => {
+      console.warn("[metier.v11.4] worker payload failed", e);
+      return null;
+    });
+  }
+
+  // -----------------------------
+  // Apply content into template
+  // -----------------------------
+  function setText(id, txt) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = (txt === undefined || txt === null) ? "" : String(txt);
+  }
+
+  function sectionContentNode(titleId) {
+    const h = document.getElementById(titleId);
+    if (!h) return null;
+    const card = h.closest(".card");
+    if (!card) return null;
+    // usually .rich-content inside the card
+    return card.querySelector(".rich-content") || card.querySelector(".space-y-4") || card;
+  }
+
+  function setRich(titleId, htmlOrText) {
+    const node = sectionContentNode(titleId);
+    if (!node) return;
+    if (Array.isArray(htmlOrText)) {
+      node.innerHTML = `<ul>${htmlOrText.map(li => `<li>${escapeHtml(String(li))}</li>`).join("")}</ul>`;
+      return;
+    }
+    const s = (htmlOrText === undefined || htmlOrText === null) ? "" : String(htmlOrText);
+    // if looks like html, accept; else paragraph
+    if (/<[a-z][\s\S]*>/i.test(s)) node.innerHTML = s;
+    else node.innerHTML = `<p>${escapeHtml(s).replace(/\n+/g, "<br/>")}</p>`;
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  }
+
+  function wireFAQToggles() {
+    $all(".faq-question").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const item = btn.closest(".faq-item");
+        if (!item) return;
+        const ans = $(".faq-answer", item);
+        const icon = $(".faq-icon", item);
+        if (!ans) return;
+        const open = !ans.classList.contains("hidden");
+        if (open) {
+          ans.classList.add("hidden");
+          if (icon) icon.style.transform = "rotate(0deg)";
+        } else {
+          ans.classList.remove("hidden");
+          if (icon) icon.style.transform = "rotate(180deg)";
+        }
+      });
+    });
+  }
+
+  // -----------------------------
+  // Sponsor banners (preview -> worker -> country fallback)
+  // -----------------------------
+  async function resolveCountryBanners(iso) {
+    const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`).catch(() => null);
     const countries = data?.countries || [];
     const c = countries.find(x => String(x?.iso || "").toUpperCase() === iso) || null;
-    if (!c) return;
-
+    if (!c) return { wide:"", square:"", cta:"" };
     const u1 = pickUrl(c?.banners?.image_1);
     const u2 = pickUrl(c?.banners?.image_2);
-
     const [r1, r2] = await Promise.all([getImageRatio(u1), getImageRatio(u2)]);
-    const wideUrl = (r1 >= r2) ? u1 : u2;
-    const squareUrl = (r1 >= r2) ? u2 : u1;
+    const wide = (r1 >= r2) ? u1 : u2;
+    const square = (r1 >= r2) ? u2 : u1;
+    const cta = String(c?.banners?.cta || "").trim();
+    return { wide, square, cta };
+  }
 
+  async function applySponsor({ iso, slug, payload }) {
+    const p = qp();
+    const isPreview = String(p.get("preview") || "") === "1";
+
+    // slots
     const wideA = document.getElementById("sponsor-banner-link");
-    if (wideA) setBg(wideA, wideUrl);
-
+    const nameBanner = document.getElementById("sponsor-name-banner");
+    const nameSide = document.getElementById("sponsor-name-sidebar");
     const logoA = document.getElementById("sponsor-logo-link");
     const logoBox = logoA ? logoA.querySelector(".sponsor-logo-square") : null;
-    if (logoBox) {
-      setBg(logoBox, squareUrl);
+    const ctaBtn = document.getElementById("sponsor-cta") || document.getElementById("sponsor-cta-btn");
+
+    // 1) PREVIEW (highest priority)
+    if (isPreview) {
+      const wide = decodeURIComponent(String(p.get("preview_landscape") || p.get("preview_wide") || "").trim());
+      const square = decodeURIComponent(String(p.get("preview_square") || "").trim());
+      const link = decodeURIComponent(String(p.get("preview_link") || "").trim());
+      const sname = decodeURIComponent(String(p.get("preview_name") || "").trim());
+
+      if (wideA && wide) setBg(wideA, wide);
+      if (logoBox && square) {
+        setBg(logoBox, square);
+        const svg = logoBox.querySelector("svg");
+        if (svg) svg.style.display = "none";
+      }
+      if (link) {
+        if (wideA) wideA.href = link;
+        if (logoA) logoA.href = link;
+        if (ctaBtn) ctaBtn.href = link;
+      }
+      if (sname) {
+        if (nameBanner) nameBanner.textContent = sname;
+        if (nameSide) nameSide.textContent = sname;
+      }
+      return;
+    }
+
+    // 2) WORKER SPONSOR (if metier sponsored in this iso)
+    const sponsor = payload?.sponsor || payload?.metier?.sponsor || null;
+    const sWide = pickUrl(sponsor?.logo_2 || sponsor?.wide || sponsor?.banner_wide || sponsor?.image_wide);
+    const sSquare = pickUrl(sponsor?.logo_1 || sponsor?.square || sponsor?.logo_square || sponsor?.image_square);
+    const sLink = String(sponsor?.link || sponsor?.url || sponsor?.website || "").trim();
+    const sName = String(sponsor?.name || sponsor?.nom || sponsor?.company || "").trim();
+
+    if (sWide || sSquare || sLink || sName) {
+      if (wideA && sWide) setBg(wideA, sWide);
+      if (logoBox && sSquare) {
+        setBg(logoBox, sSquare);
+        const svg = logoBox.querySelector("svg");
+        if (svg) svg.style.display = "none";
+      }
+      if (sLink) {
+        if (wideA) wideA.href = sLink;
+        if (logoA) logoA.href = sLink;
+        if (ctaBtn) ctaBtn.href = sLink;
+      }
+      if (sName) {
+        if (nameBanner) nameBanner.textContent = sName;
+        if (nameSide) nameSide.textContent = sName;
+      }
+      return;
+    }
+
+    // 3) COUNTRY FALLBACK
+    const fb = await resolveCountryBanners(iso);
+    if (wideA && fb.wide) setBg(wideA, fb.wide);
+    if (logoBox && fb.square) {
+      setBg(logoBox, fb.square);
       const svg = logoBox.querySelector("svg");
-      if (svg && squareUrl) svg.style.display = "none";
+      if (svg) svg.style.display = "none";
     }
-
-    const ctaText = String(c?.banners?.cta || "").trim();
-    if (ctaText) {
-      const btn = document.getElementById("sponsor-cta-btn") || document.querySelector("[data-sponsor-cta]");
-      if (btn) btn.textContent = ctaText;
-    }
+    // default CTA target (your sponsorship page)
+    const fallbackLink = `/sponsorship?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
+    if (wideA) wideA.href = fallbackLink;
+    if (logoA) logoA.href = fallbackLink;
+    if (ctaBtn) ctaBtn.href = fallbackLink;
+    if (fb.cta && ctaBtn) ctaBtn.textContent = fb.cta;
   }
 
-  function patchDebugBox(iso, slug) {
-    const info = document.getElementById("ulydia-info") || document.querySelector("[data-ulydia-info]");
-    if (info) info.textContent = `ISO: ${iso}\nSlug: ${slug || "-"}`;
+  // -----------------------------
+  // Filters
+  // -----------------------------
+  async function initFilters({ iso, slug }) {
+    const paysSel = document.getElementById("filter-pays");
+    const secSel  = document.getElementById("filter-secteur");
+    const metInp  = document.getElementById("filter-metier");
+    const suggBox = document.getElementById("metier-suggestions");
+    const resetBtn = document.getElementById("reset-filters");
+    const countEl = document.getElementById("result-count");
+
+    // Countries from catalog
+    let countries = [];
+    try {
+      const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`);
+      countries = (data?.countries || []).map(c => ({
+        iso: String(c.iso || "").toUpperCase(),
+        label: String(c.label || c.name || c.slug || c.iso || "").trim()
+      })).filter(x => x.iso && x.label);
+      countries.sort((a,b) => a.label.localeCompare(b.label, "fr"));
+    } catch (e) {
+      console.warn("[metier.v11.4] catalog countries failed", e);
+    }
+
+    if (paysSel && countries.length) {
+      paysSel.innerHTML = countries.map(c => `<option value="${escapeHtml(c.iso)}">${escapeHtml(c.label)}</option>`).join("");
+      paysSel.value = iso;
+    }
+
+    // Sectors + metiers from embedded JSON (metiersData / sectorsData)
+    const metiersRaw = readJSONScript("metiersData") || window.__ULYDIA_METIERS__ || [];
+    const sectorsRaw = readJSONScript("sectorsData") || window.__ULYDIA_SECTEURS__ || [];
+
+    const metiers = (Array.isArray(metiersRaw) ? metiersRaw : []).map(normalizeItem).filter(x => x.slug && x.name);
+    const sectors = (Array.isArray(sectorsRaw) ? sectorsRaw : []).map(s => {
+      const f = s?.fieldData || s?.fields || s || {};
+      return String(f.nom || f.name || f.titre || f.title || f.slug || "").trim();
+    }).filter(Boolean);
+
+    // Sector dropdown
+    if (secSel) {
+      const opts = [`<option value="">Tous les secteurs</option>`]
+        .concat(sectors.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`));
+      secSel.innerHTML = opts.join("");
+    }
+
+    function currentSector() {
+      return secSel ? String(secSel.value || "").trim() : "";
+    }
+
+    function filterMetiers(q) {
+      const qq = String(q || "").toLowerCase().trim();
+      const sec = currentSector();
+      return metiers.filter(m => {
+        const okQ = !qq || m.name.toLowerCase().includes(qq) || m.slug.toLowerCase().includes(qq);
+        const okS = !sec || (m.secteur && m.secteur === sec);
+        return okQ && okS;
+      }).slice(0, 25);
+    }
+
+    function renderSuggestions(list) {
+      if (!suggBox) return;
+      if (!list.length) { suggBox.classList.add("hidden"); suggBox.innerHTML = ""; return; }
+      suggBox.innerHTML = list.map(m => `
+        <button type="button" data-slug="${escapeHtml(m.slug)}"
+          style="display:block;width:100%;text-align:left;padding:10px 12px;background:white;border-bottom:1px solid rgba(0,0,0,.06);">
+          <div style="font-weight:700;font-size:13px;color:#111827">${escapeHtml(m.name)}</div>
+          <div style="font-size:12px;color:#6b7280">${escapeHtml(m.slug)}</div>
+        </button>
+      `).join("");
+      suggBox.classList.remove("hidden");
+
+      $all("button[data-slug]", suggBox).forEach(b => {
+        b.addEventListener("click", () => {
+          const s = b.getAttribute("data-slug") || "";
+          const cISO = paysSel ? String(paysSel.value || iso) : iso;
+          const url = new URL(location.href);
+          url.searchParams.set("metier", s);
+          url.searchParams.set("slug", s);
+          url.searchParams.set("country", cISO);
+          url.searchParams.delete("preview");
+          location.href = url.toString();
+        });
+      });
+    }
+
+    function updateCount() {
+      if (!countEl) return;
+      const list = filterMetiers(metInp ? metInp.value : "");
+      countEl.textContent = String(list.length || 0);
+    }
+
+    // Events
+    if (metInp) {
+      metInp.addEventListener("input", () => {
+        renderSuggestions(filterMetiers(metInp.value));
+        updateCount();
+      });
+      metInp.addEventListener("focus", () => renderSuggestions(filterMetiers(metInp.value)));
+      document.addEventListener("click", (e) => {
+        if (!suggBox) return;
+        if (e.target === metInp || suggBox.contains(e.target)) return;
+        suggBox.classList.add("hidden");
+      });
+    }
+
+    if (secSel) {
+      secSel.addEventListener("change", () => {
+        if (metInp) renderSuggestions(filterMetiers(metInp.value));
+        updateCount();
+      });
+    }
+
+    if (paysSel) {
+      paysSel.addEventListener("change", () => {
+        const cISO = String(paysSel.value || "").trim();
+        const url = new URL(location.href);
+        url.searchParams.set("country", cISO);
+        url.searchParams.set("iso", cISO);
+        location.href = url.toString();
+      });
+    }
+
+    if (resetBtn) {
+      resetBtn.addEventListener("click", () => {
+        const url = new URL(location.href);
+        const cISO = paysSel ? String(paysSel.value || iso) : iso;
+        url.searchParams.set("country", cISO);
+        url.searchParams.set("iso", cISO);
+        url.searchParams.delete("metier");
+        url.searchParams.delete("slug");
+        url.searchParams.delete("preview");
+        location.href = url.toString();
+      });
+    }
+
+    updateCount();
   }
 
-  function boot() {
+  // -----------------------------
+  // Boot
+  // -----------------------------
+  async function boot() {
     const root = ensureRoot();
     renderPlaceholder(root);
 
@@ -1641,9 +1935,10 @@
       }
     }`);
 
-    const iso = detectISO();
-    const slug = detectSlug();
-    console.log("[metier-page] v11.3 boot", { iso, slug });
+    const iso = getISO();
+    const slug = getSlug();
+
+    console.log("[metier-page] v11.4 boot", { iso, slug });
 
     try {
       renderShell(root);
@@ -1652,13 +1947,65 @@
       return;
     }
 
-    patchDebugBox(iso, slug);
-    applyBannersForISO(iso).catch(e => overlayError("Apply banners failed", e));
+    // Filters now that DOM exists
+    initFilters({ iso, slug }).catch(e => overlayError("Init filters failed", e));
+
+    // Fetch real metier payload
+    const payload = await fetchMetierPayload({ iso, slug });
+
+    // Apply sponsor & link (preview -> worker -> country fallback)
+    applySponsor({ iso, slug, payload }).catch(e => overlayError("Apply sponsor failed", e));
+
+    // Apply real metier content
+    const m = payload?.metier || payload?.job || null;
+    if (m) {
+      setText("nom-metier", m.name || m.nom || m.title || slug);
+      setText("accroche-metier", m.accroche || m.tagline || m.subtitle || m.summary || "");
+
+      // Main sections (robust keys)
+      setRich("description-title", m.description || m.overview || m.vue_ensemble || "");
+      setRich("missions-title", m.missions || m.missions_principales || m.tasks || []);
+      setRich("competences-title", m.competences || m.skills || []);
+      setRich("environnements-title", m.environnements || m.work_environment || "");
+      setRich("profil-title", m.profil || m.profile || "");
+      setRich("evolutions-title", m.evolutions || m.career_path || "");
+
+      // Optional FAQ if provided (array of {q,a})
+      if (Array.isArray(m.faq) && m.faq.length) {
+        const faqWrap = document.getElementById("faq-title")?.closest(".card")?.querySelector(".space-y-3");
+        if (faqWrap) {
+          faqWrap.innerHTML = m.faq.map(item => {
+            const q = escapeHtml(String(item.q || item.question || "").trim());
+            const a = String(item.a || item.answer || "").trim();
+            const aHtml = /<[a-z][\s\S]*>/i.test(a) ? a : `<p>${escapeHtml(a)}</p>`;
+            return `
+              <div class="faq-item">
+                <button class="faq-question w-full text-left p-4 rounded-lg transition-all flex items-start justify-between gap-3" style="background: white; border: 2px solid var(--border);">
+                  <div class="flex items-start gap-3 flex-1">
+                    <span class="text-xl flex-shrink-0">❓</span>
+                    <span class="font-semibold text-sm" style="color: var(--text);">${q}</span>
+                  </div>
+                  <svg class="faq-icon w-5 h-5 flex-shrink-0 transition-transform" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
+                </button>
+                <div class="faq-answer hidden mt-2 px-4 py-3 rounded-lg text-sm" style="background: rgba(99,102,241,0.05); color: var(--text); border-left: 3px solid var(--primary); margin-left: 20px;">
+                  ${aHtml}
+                </div>
+              </div>
+            `;
+          }).join("");
+        }
+      }
+    } else {
+      // still set the slug so user sees something
+      if (slug) setText("nom-metier", slug.replace(/-/g, " "));
+    }
+
+    // FAQ toggles
+    wireFAQToggles();
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
-  } else {
-    boot();
-  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
+  else boot().catch(e => overlayError("Boot failed", e));
 })();
