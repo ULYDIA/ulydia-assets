@@ -118,6 +118,15 @@
     return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
   }
 
+  function mdInline(s){
+    // supports **bold** and __bold__ in plain text inputs
+    const esc = escapeHtml(String(s || ""));
+    return esc
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/__(.+?)__/g, "<strong>$1</strong>");
+  }
+
+
   async function fetchJSON(url, opt={}) {
     const res = await fetch(url, { cache: "no-store", ...opt });
     if (!res.ok) {
@@ -1266,7 +1275,7 @@
     showCard(titleId);
     const s = String(htmlOrText);
     if (/<[a-z][\s\S]*>/i.test(s)) node.innerHTML = s;
-    else node.innerHTML = `<p>${escapeHtml(s).replace(/\n+/g, "<br/>")}</p>`;
+    else node.innerHTML = `<p>${mdInline(s).replace(/\n+/g, "<br/>")}</p>`;
   }
 
   // ---------- Hide pays-bloc UI by header text (no IDs in template) ----------
@@ -1452,11 +1461,16 @@
     const wideUrl = pickUrl(f.sponsor_logo_2); // wide
     const squareUrl = pickUrl(f.sponsor_logo_1); // square
 
-    const hasSponsor = !!(wideUrl || squareUrl || wfName || wfLink);
+    const hasSponsor = !!(wideUrl || squareUrl);
 
     if (hasSponsor) {
-      replaceWideBannerWithImg(wideA, wideUrl, fb.wide);
-      replaceSquareWithImg(logoBox, squareUrl, fb.square);
+      // sponsored: never show country fallback banners on this fiche
+      if (wideUrl) replaceWideBannerWithImg(wideA, wideUrl, "");
+      else if (wideA) { wideA.classList.remove("ul-has-banner-img"); wideA.style.backgroundImage = "none"; }
+
+      if (squareUrl) replaceSquareWithImg(logoBox, squareUrl, "");
+      else if (logoBox) { logoBox.style.backgroundImage = "none"; logoBox.innerHTML = ""; }
+
       setLinks(wfLink || fallbackLink);
       setNames(wfName);
       if (ctaBtn) ctaBtn.style.display = ""; // keep
@@ -1503,7 +1517,7 @@
       const q = String(item.question || item.q || item["Question"] || "").trim();
       const a = String(item.answer || item.a || item["Réponse"] || item["Reponse"] || "").trim();
       const qSafe = escapeHtml(q || "—");
-      const aHtml = /<[a-z][\s\S]*>/i.test(a) ? a : `<p>${escapeHtml(a)}</p>`;
+      const aHtml = /<[a-z][\s\S]*>/i.test(a) ? a : `<p>${mdInline(a)}</p>`;
       return `
         <div class="faq-item">
           <button class="faq-question w-full text-left p-4 rounded-lg transition-all flex items-start justify-between gap-3" style="background: white; border: 2px solid var(--border);">
@@ -1995,8 +2009,24 @@
     }
 
     // FAQ
-    const faqList = payload?.faq || payload?.faqs || payload?.FAQ || null;
-    renderFAQ(Array.isArray(faqList) ? faqList : []);
+    const faqList0 = payload?.faq || payload?.faqs || payload?.FAQ || null;
+    let faqList = Array.isArray(faqList0) ? faqList0 : [];
+    // If worker payload doesn't include FAQs, try dedicated endpoints (best-effort, non-blocking)
+    if (faqList.length === 0) {
+      const tries = [
+        `${WORKER_URL}/v1/faqs?iso=${encodeURIComponent(iso)}&slug=${encodeURIComponent(slug)}&proxy_secret=${encodeURIComponent(PROXY_SECRET)}`,
+        `${WORKER_URL}/v1/faq?iso=${encodeURIComponent(iso)}&slug=${encodeURIComponent(slug)}&proxy_secret=${encodeURIComponent(PROXY_SECRET)}`,
+        `${WORKER_URL}/v1/metier-faqs?iso=${encodeURIComponent(iso)}&slug=${encodeURIComponent(slug)}&proxy_secret=${encodeURIComponent(PROXY_SECRET)}`
+      ];
+      for (const u of tries) {
+        try {
+          const j = await fetchJSON(u);
+          const arr = j?.faq || j?.faqs || j?.items || j?.data || null;
+          if (Array.isArray(arr) && arr.length) { faqList = arr; break; }
+        } catch(_) {}
+      }
+    }
+    renderFAQ(faqList);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
