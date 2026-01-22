@@ -1,14 +1,16 @@
-/* metier-page.v11.6.js — Ulydia
-   Fixes requested:
-   ✅ No flicker: FAQ & Metier_Pays_Bloc sections are hidden by default and only shown if data exists.
-   ✅ Sponsor wide banner: sets IMG src (if present) + hides any leftover placeholder/overlay images.
-   ✅ Sponsor square logo: sets background or IMG src (if present) and hides placeholder SVG.
-   ✅ Never keep placeholder sponsor name.
-   ✅ Clears template placeholder content for optional blocks to avoid showing empty cards.
+/* metier-page.v11.7.js — Ulydia
+   Hotfixes:
+   ✅ Wide banner double-visual: when we have an image URL, we REPLACE banner contents with a single <img>.
+      (So no template overlay, no pseudo-layer, no background stacking.)
+   ✅ FAQ flicker: FAQ card is force-hidden immediately after shell render, and its placeholder items are cleared.
+      Then we show it ONLY if we have FAQ data.
+   ✅ Metier_Pays_Bloc sections (Accès / Marché / Salaire / Formation):
+      - Hidden by default
+      - Shown only if bloc data exists for (slug, iso)
 */
 (() => {
-  if (window.__ULYDIA_METIER_V116__) return;
-  window.__ULYDIA_METIER_V116__ = true;
+  if (window.__ULYDIA_METIER_V117__) return;
+  window.__ULYDIA_METIER_V117__ = true;
 
   const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const CATALOG_URL = `${ASSETS_BASE}/catalog.json`;
@@ -34,14 +36,14 @@
     if (document.getElementById(id)) return;
     const s = document.createElement("script");
     s.id = id; s.src = src; s.async = true;
-    s.onerror = () => console.warn("[metier.v11.6] failed to load", src);
+    s.onerror = () => console.warn("[metier.v11.7] failed to load", src);
     document.head.appendChild(s);
   }
 
   function overlayError(title, err) {
     try {
       const msg = err ? (err.stack || err.message || String(err)) : "";
-      console.error("[metier.v11.6]", title, err);
+      console.error("[metier.v11.7]", title, err);
       let box = document.getElementById("ulydia-metier-error");
       if (!box) {
         box = document.createElement("pre");
@@ -60,7 +62,7 @@
         box.style.font = "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
         document.body.appendChild(box);
       }
-      box.textContent = `[metier-page.v11.6] ${title}\n\n${msg}`;
+      box.textContent = `[metier-page.v11.7] ${title}\n\n${msg}`;
     } catch(_) {}
   }
 
@@ -111,41 +113,11 @@
     return res.json();
   }
 
-  function setBg(el, url) {
-    if (!el || !url) return false;
-    el.style.backgroundImage = `url("${url}")`;
-    el.style.backgroundSize = "cover";
-    el.style.backgroundPosition = "center";
-    el.style.backgroundRepeat = "no-repeat";
-    return true;
-  }
-  function clearBg(el){ if(el){ el.style.backgroundImage=""; } }
-
-  function setImg(el, url) {
-    if (!el || !url) return false;
-    el.src = url;
-    el.removeAttribute("srcset");
-    el.style.display = "";
-    el.style.opacity = "1";
-    return true;
-  }
-
-  function getImageRatio(url) {
-    return new Promise((resolve) => {
-      if (!url) return resolve(0);
-      const img = new Image();
-      img.onload = () => resolve((img.naturalWidth || 0) / ((img.naturalHeight || 1) || 1));
-      img.onerror = () => resolve(0);
-      img.src = url;
-    });
-  }
-
   function ensureRoot() {
     let root = document.getElementById("ulydia-metier-root");
     if (!root) { root = document.createElement("div"); root.id = "ulydia-metier-root"; document.body.prepend(root); }
     return root;
   }
-
   function renderPlaceholder(root) {
     root.innerHTML = `
       <div style="padding:16px;font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial">
@@ -157,7 +129,6 @@
       </div>
     `;
   }
-
   function renderShell(root) { root.innerHTML = `<div class="w-full h-full" style="background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);"><!-- Barre de Filtres -->
    <div class="w-full" style="background: white; border-bottom: 2px solid var(--border); box-shadow: 0 2px 8px rgba(0,0,0,.05);">
     <div class="max-w-[1200px] mx-auto px-6 py-4">
@@ -1258,7 +1229,7 @@
   </script>
  <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9c15a4f745056984',t:'MTc2ODk4NjI2OS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>`; }
 
-  // ---------------- Optional sections control ----------------
+  // ---------- Cards ----------
   function cardByTitleId(titleId) {
     const h = document.getElementById(titleId);
     if (!h) return null;
@@ -1266,15 +1237,6 @@
   }
   function hideCard(titleId) { const c = cardByTitleId(titleId); if (c) c.style.display = "none"; }
   function showCard(titleId) { const c = cardByTitleId(titleId); if (c) c.style.display = ""; }
-
-  function isEmptyRich(v) {
-    if (v === undefined || v === null) return true;
-    if (Array.isArray(v)) return v.length === 0;
-    const s = String(v).replace(/\s+/g, " ").trim();
-    if (!s) return true;
-    const stripped = s.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-    return !stripped;
-  }
 
   function sectionContentNode(titleId) {
     const h = document.getElementById(titleId);
@@ -1284,54 +1246,61 @@
     return c.querySelector(".rich-content") || c.querySelector(".space-y-4") || c;
   }
 
-  function clearTemplatePlaceholders() {
-    // Clear sponsor name placeholders
-    const nb = document.getElementById("sponsor-name-banner");
-    const ns = document.getElementById("sponsor-name-sidebar");
-    if (nb) nb.textContent = "";
-    if (ns) ns.textContent = "";
-
-    // Hide FAQ & Metier_pays_bloc sections by default (no flicker)
-    hideCard("faq-title");
-    // If you have Metier_Pays_Bloc specific cards in template, hide them too (IDs below must match template)
-    hideCard("salaire-title");
-    hideCard("diplomes-title");
-    hideCard("formation-title");
-
-    // Clear rich nodes to avoid showing placeholder text when we hide/show
-    const ids = ["description-title","missions-title","competences-title","environnements-title","profil-title","evolutions-title"];
-    ids.forEach(id => {
-      const node = sectionContentNode(id);
-      if (node) node.innerHTML = "";
-    });
+  function isEmptyRich(v) {
+    if (v === undefined || v === null) return true;
+    if (Array.isArray(v)) return v.length === 0;
+    const s = String(v).replace(/\s+/g, " ").trim();
+    if (!s) return true;
+    const stripped = s.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+    return !stripped;
   }
-
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
   }
-
   function setText(id, txt) {
     const el = document.getElementById(id);
     if (!el) return;
     el.textContent = (txt === undefined || txt === null) ? "" : String(txt);
   }
-
   function setRich(titleId, htmlOrText) {
     const node = sectionContentNode(titleId);
     if (!node) return;
     if (isEmptyRich(htmlOrText)) { hideCard(titleId); return; }
     showCard(titleId);
 
-    if (Array.isArray(htmlOrText)) {
-      node.innerHTML = `<ul>${htmlOrText.map(li => `<li>${escapeHtml(String(li))}</li>`).join("")}</ul>`;
-      return;
-    }
     const s = String(htmlOrText);
     if (/<[a-z][\s\S]*>/i.test(s)) node.innerHTML = s;
     else node.innerHTML = `<p>${escapeHtml(s).replace(/\n+/g, "<br/>")}</p>`;
   }
 
-  // ---------------- Worker payload ----------------
+  // ---------- Force hide placeholders immediately (no flicker) ----------
+  function killTemplatePlaceholdersNow() {
+    // Clear sponsor names
+    const nb = document.getElementById("sponsor-name-banner");
+    const ns = document.getElementById("sponsor-name-sidebar");
+    if (nb) nb.textContent = "";
+    if (ns) ns.textContent = "";
+
+    // FAQ: hide and clear items
+    const faqCard = cardByTitleId("faq-title");
+    if (faqCard) {
+      faqCard.style.display = "none";
+      const wrap = faqCard.querySelector(".space-y-3");
+      if (wrap) wrap.innerHTML = "";
+    }
+
+    // Metier_Pays_Bloc sections in template: hide by default
+    ["acces-title","marche-title","salaire-title","formation-title"].forEach(id => {
+      const c = cardByTitleId(id);
+      if (c) {
+        c.style.display = "none";
+        const node = sectionContentNode(id);
+        if (node) node.innerHTML = "";
+      }
+    });
+  }
+
+  // ---------- Worker ----------
   async function fetchMetierPayload({ iso, slug }) {
     if (!slug) return null;
     const url = new URL(`${WORKER_URL}/v1/metier-page`);
@@ -1339,12 +1308,30 @@
     url.searchParams.set("slug", slug);
     url.searchParams.set("proxy_secret", PROXY_SECRET);
     return fetchJSON(url.toString()).catch((e) => {
-      console.warn("[metier.v11.6] worker payload failed", e);
+      console.warn("[metier.v11.7] worker payload failed", e);
       return null;
     });
   }
 
-  // ---------------- Sponsor ----------------
+  // ---------- Sponsor rendering (replace banner with <img>) ----------
+  function replaceWideBannerWithImg(wideA, wideUrl) {
+    if (!wideA || !wideUrl) return;
+    wideA.classList.add("ul-has-banner-img");
+    wideA.style.backgroundImage = "none";
+    wideA.innerHTML = `
+      <img alt="" src="${wideUrl.replace(/"/g, "&quot;")}"
+           style="width:100%;height:100%;object-fit:cover;display:block" />
+    `;
+  }
+  function replaceSquareWithImg(logoBox, squareUrl) {
+    if (!logoBox || !squareUrl) return;
+    logoBox.style.backgroundImage = "none";
+    logoBox.innerHTML = `
+      <img alt="" src="${squareUrl.replace(/"/g, "&quot;")}"
+           style="width:100%;height:100%;object-fit:cover;border-radius:16px;display:block" />
+    `;
+  }
+
   async function resolveCountryBanners(iso) {
     const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`).catch(() => null);
     const countries = data?.countries || [];
@@ -1352,78 +1339,45 @@
     if (!c) return { wide:"", square:"", cta:"" };
     const u1 = pickUrl(c?.banners?.image_1);
     const u2 = pickUrl(c?.banners?.image_2);
-    const [r1, r2] = await Promise.all([getImageRatio(u1), getImageRatio(u2)]);
+
+    // choose by ratio when both exist
+    const r = async (u)=> {
+      if(!u) return 0;
+      return new Promise(res=>{
+        const im=new Image();
+        im.onload=()=>res((im.naturalWidth||0)/((im.naturalHeight||1)||1));
+        im.onerror=()=>res(0);
+        im.src=u;
+      });
+    };
+    const [r1,r2] = await Promise.all([r(u1), r(u2)]);
     const wide = (r1 >= r2) ? u1 : u2;
     const square = (r1 >= r2) ? u2 : u1;
     const cta = String(c?.banners?.cta || "").trim();
     return { wide, square, cta };
   }
 
-  function killOverlaysInWideBanner(wideA) {
-    if (!wideA) return;
-    // If there are multiple images stacked, keep only the first IMG visible
-    const imgs = $all("img", wideA);
-    imgs.forEach((im, idx) => {
-      if (idx === 0) {
-        im.style.opacity = "1";
-        im.style.display = "";
-      } else {
-        im.style.opacity = "0";
-        im.style.display = "none";
-      }
-    });
-    // Also remove any background if we use <img>
-    if (imgs.length) clearBg(wideA);
-  }
+  async function applySponsor({ iso, slug, payload }) {
+    const p = qp();
+    const isPreview = String(p.get("preview") || "") === "1";
 
-  function applySponsorToDOM({ wideUrl, squareUrl, linkUrl, sponsorName }) {
     const wideA = document.getElementById("sponsor-banner-link");
     const logoA = document.getElementById("sponsor-logo-link");
     const logoBox = logoA ? logoA.querySelector(".sponsor-logo-square") : null;
     const ctaBtn = document.getElementById("sponsor-cta") || document.getElementById("sponsor-cta-btn");
 
-    const nameBanner = document.getElementById("sponsor-name-banner");
-    const nameSide = document.getElementById("sponsor-name-sidebar");
-
-    // Wide banner: prefer <img> if exists to avoid weird overlays
-    if (wideA && wideUrl) {
-      const img = $("img", wideA);
-      if (img) {
-        setImg(img, wideUrl);
-        killOverlaysInWideBanner(wideA);
-      } else {
-        setBg(wideA, wideUrl);
-      }
-    }
-
-    // Square: inside logoBox (div). If it contains an <img>, set it; else use background.
-    if (logoBox && squareUrl) {
-      const img2 = $("img", logoBox);
-      if (img2) setImg(img2, squareUrl);
-      else setBg(logoBox, squareUrl);
-
-      const svg = $("svg", logoBox);
-      if (svg) svg.style.display = "none";
-    }
-
-    if (linkUrl) {
+    function setLinks(linkUrl){
+      if (!linkUrl) return;
       if (wideA) wideA.href = linkUrl;
       if (logoA) logoA.href = linkUrl;
       if (ctaBtn) ctaBtn.href = linkUrl;
     }
-
-    if (sponsorName) {
-      if (nameBanner) nameBanner.textContent = sponsorName;
-      if (nameSide) nameSide.textContent = sponsorName;
-    } else {
-      if (nameBanner) nameBanner.textContent = "";
-      if (nameSide) nameSide.textContent = "";
+    function setNames(name){
+      const nb = document.getElementById("sponsor-name-banner");
+      const ns = document.getElementById("sponsor-name-sidebar");
+      if (nb) nb.textContent = name || "";
+      if (ns) ns.textContent = name || "";
     }
-  }
-
-  async function applySponsor({ iso, slug, payload }) {
-    const p = qp();
-    const isPreview = String(p.get("preview") || "") === "1";
 
     // 1) Preview
     if (isPreview) {
@@ -1431,7 +1385,11 @@
       const square = decodeURIComponent(String(p.get("preview_square") || "").trim());
       const link = decodeURIComponent(String(p.get("preview_link") || "").trim());
       const sname = decodeURIComponent(String(p.get("preview_name") || "").trim());
-      applySponsorToDOM({ wideUrl: wide, squareUrl: square, linkUrl: link, sponsorName: sname });
+
+      if (wide) replaceWideBannerWithImg(wideA, wide);
+      if (square) replaceSquareWithImg(logoBox, square);
+      setLinks(link);
+      setNames(sname);
       return;
     }
 
@@ -1440,34 +1398,49 @@
     const f = m?.fieldData || m?.fields || m || {};
 
     const wfName = String(f.sponsor_name || "").trim();
-    const wfLink = String(
-      f.lien_sponsor?.url || f.lien_sponsor?.href || f.lien_sponsor || ""
-    ).trim();
-
+    const wfLink = String(f.lien_sponsor?.url || f.lien_sponsor?.href || f.lien_sponsor || "").trim();
     const wf1 = pickUrl(f.sponsor_logo_1);
     const wf2 = pickUrl(f.sponsor_logo_2);
 
-    if (wf1 || wf2 || wfName || wfLink) {
-      let wideUrl = wf2, squareUrl = wf1;
-      if (wf1 && wf2) {
-        const [r1, r2] = await Promise.all([getImageRatio(wf1), getImageRatio(wf2)]);
-        if (r1 > r2) { wideUrl = wf1; squareUrl = wf2; } else { wideUrl = wf2; squareUrl = wf1; }
-      } else if (wf1 && !wf2) wideUrl = wf1;
+    // Decide wide/square by ratio if both exist
+    let wideUrl = wf2, squareUrl = wf1;
+    if (wf1 && wf2) {
+      const r = async (u)=> {
+        if(!u) return 0;
+        return new Promise(res=>{
+          const im=new Image();
+          im.onload=()=>res((im.naturalWidth||0)/((im.naturalHeight||1)||1));
+          im.onerror=()=>res(0);
+          im.src=u;
+        });
+      };
+      const [r1,r2] = await Promise.all([r(wf1), r(wf2)]);
+      if (r1 > r2) { wideUrl = wf1; squareUrl = wf2; }
+      else { wideUrl = wf2; squareUrl = wf1; }
+    } else if (wf1 && !wf2) {
+      wideUrl = wf1;
+      squareUrl = "";
+    }
 
-      applySponsorToDOM({ wideUrl, squareUrl, linkUrl: wfLink, sponsorName: wfName });
+    if (wideUrl || squareUrl || wfName || wfLink) {
+      if (wideUrl) replaceWideBannerWithImg(wideA, wideUrl);
+      if (squareUrl) replaceSquareWithImg(logoBox, squareUrl);
+      setLinks(wfLink);
+      setNames(wfName);
       return;
     }
 
     // 3) Fallback country banners (no sponsor name)
     const fb = await resolveCountryBanners(iso);
     const fallbackLink = `/sponsorship?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
-    applySponsorToDOM({ wideUrl: fb.wide, squareUrl: fb.square, linkUrl: fallbackLink, sponsorName: "" });
-
-    const ctaBtn = document.getElementById("sponsor-cta") || document.getElementById("sponsor-cta-btn");
+    if (fb.wide) replaceWideBannerWithImg(wideA, fb.wide);
+    if (fb.square) replaceSquareWithImg(logoBox, fb.square);
+    setLinks(fallbackLink);
+    setNames("");
     if (fb.cta && ctaBtn) ctaBtn.textContent = fb.cta;
   }
 
-  // ---------------- FAQ (no flicker) ----------------
+  // ---------- FAQ (show only with data) ----------
   function wireFAQToggles() {
     $all(".faq-question").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -1482,10 +1455,8 @@
       });
     });
   }
-
   function renderFAQ(list) {
-    const faqTitle = document.getElementById("faq-title");
-    const faqCard = faqTitle ? cardByTitleId("faq-title") : null;
+    const faqCard = cardByTitleId("faq-title");
     if (!faqCard) return;
 
     if (!Array.isArray(list) || list.length === 0) {
@@ -1498,8 +1469,8 @@
     if (!wrap) return;
 
     wrap.innerHTML = list.map(item => {
-      const q = String(item.question || item.q || "").trim();
-      const a = String(item.answer || item.a || "").trim();
+      const q = String(item.question || item.q || item["Question"] || "").trim();
+      const a = String(item.answer || item.a || item["Réponse"] || item["Reponse"] || "").trim();
       const qSafe = escapeHtml(q || "—");
       const aHtml = /<[a-z][\s\S]*>/i.test(a) ? a : `<p>${escapeHtml(a)}</p>`;
       return `
@@ -1519,11 +1490,48 @@
         </div>
       `;
     }).join("");
-
     wireFAQToggles();
   }
 
-  // ---------------- Boot ----------------
+  // ---------- Metier_Pays_Bloc (show only if exists) ----------
+  function findBloc(payload) {
+    // Accept several possible shapes
+    const b =
+      payload?.metier_pays_bloc ||
+      payload?.metier_pays_blocs ||
+      payload?.metierPaysBloc ||
+      payload?.metierPaysBlocs ||
+      payload?.bloc ||
+      payload?.blocs ||
+      payload?.metier?.pays_bloc ||
+      null;
+
+    if (!b) return null;
+    // If it's an array, try pick first (caller should already filter by iso/slug ideally)
+    if (Array.isArray(b)) return b[0] || null;
+    return b;
+  }
+
+  function applyPaysBloc(payload) {
+    // Hide by default already done
+    const b0 = findBloc(payload);
+    if (!b0) return;
+
+    const b = b0?.fieldData || b0?.fields || b0;
+
+    // Only show if at least one of these fields exists
+    const acces = b.acces_bloc;
+    const marche = b.marche_bloc;
+    const salaire = b.salaire_bloc;
+    const formation = b.formation_bloc;
+
+    if (!isEmptyRich(acces)) setRich("acces-title", acces);
+    if (!isEmptyRich(marche)) setRich("marche-title", marche);
+    if (!isEmptyRich(salaire)) setRich("salaire-title", salaire);
+    if (!isEmptyRich(formation)) setRich("formation-title", formation);
+  }
+
+  // ---------- Boot ----------
   async function boot() {
     const root = ensureRoot();
     renderPlaceholder(root);
@@ -1872,23 +1880,28 @@
         transform: translateY(0);
       }
     }`);
+    // Also ensure our own tiny css to keep images clean
+    ensureStyle("ulydia-metier-v117-css", `
+      .ul-has-banner-img { background: none !important; }
+      .ul-has-banner-img > img { display:block !important; }
+    `);
 
     const iso = getISO();
     const slug = getSlug();
-    console.log("[metier-page] v11.6 boot", { iso, slug });
+    console.log("[metier-page] v11.7 boot", { iso, slug });
 
     try { renderShell(root); }
     catch (e) { overlayError("Render shell failed", e); return; }
 
-    // No flicker defaults
-    clearTemplatePlaceholders();
+    // MUST happen immediately after shell render (no flicker)
+    killTemplatePlaceholdersNow();
 
     const payload = await fetchMetierPayload({ iso, slug });
 
     // Sponsor
     applySponsor({ iso, slug, payload }).catch(e => overlayError("Apply sponsor failed", e));
 
-    // Content mapping
+    // Standard metier content
     const m = payload?.metier || payload?.job || payload?.item || payload || null;
     const f = m ? (m.fieldData || m.fields || m) : {};
 
@@ -1902,14 +1915,17 @@
       setRich("environnements-title", f.environnements || "");
       setRich("profil-title", f.profil_recherche || "");
       setRich("evolutions-title", f.evolutions_possibles || "");
-
-      // FAQ: only show if payload already contains faq list (no flicker)
-      const faqList = payload?.faq || payload?.faqs || null;
-      renderFAQ(Array.isArray(faqList) ? faqList : []);
     } else {
-      // Hide everything optional if we don't have data
-      ["description-title","missions-title","competences-title","environnements-title","profil-title","evolutions-title","faq-title"].forEach(hideCard);
+      // Hide everything optional if we don't have metier data
+      ["description-title","missions-title","competences-title","environnements-title","profil-title","evolutions-title"].forEach(hideCard);
     }
+
+    // Pays bloc (only show if exists)
+    applyPaysBloc(payload || {});
+
+    // FAQ (only show if exists)
+    const faqList = payload?.faq || payload?.faqs || payload?.FAQ || null;
+    renderFAQ(Array.isArray(faqList) ? faqList : []);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
