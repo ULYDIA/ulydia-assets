@@ -1521,8 +1521,21 @@ function setLinks(linkUrl){
     }
 
     // fallback banners (always available)
-    const fb = await resolveCountryBanners(iso, payload);
-    const fallbackLink = `/sponsorship?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
+    
+    function hideNonSponsorBanners(){
+      // Hide any non-sponsor placeholders that might be in the template
+      $all('[data-ul-banner-fallback], .ul-banner-fallback, [data-ul-nonsponsor]').forEach(el=>{
+        try{ el.style.display = "none"; }catch(_){}
+      });
+    }
+    function showNonSponsorBanners(){
+      $all('[data-ul-banner-fallback], .ul-banner-fallback, [data-ul-nonsponsor]').forEach(el=>{
+        try{ el.style.display = ""; }catch(_){}
+      });
+    }
+
+const fb = await resolveCountryBanners(iso, payload);
+    const fallbackLink = `/sponsor?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
 
     // 1) Preview
     if (isPreview) {
@@ -1571,9 +1584,10 @@ function setLinks(linkUrl){
     const link2 = wfLink || String(sObj?.link || sObj?.url || "").trim();
     const name2 = wfName || String(sObj?.name || "").trim();
 
-    const hasSponsor = !!(wideUrl2 || squareUrl2 || name2 || link2);
+    const hasSponsor = !!(payload?.sponsor?.active || wideUrl2 || squareUrl2 || name2 || link2);
 
     if (hasSponsor) {
+      hideNonSponsorBanners();
       // IMPORTANT: if sponsor exists, do NOT show fallback banners
       replaceWideBannerWithImg(wideA, wideUrl2, "");        // no fallback
       replaceSquareWithImg(logoBox, squareUrl2, "");        // no fallback
@@ -1584,6 +1598,8 @@ function setLinks(linkUrl){
     }
 
     // 3) Fallback country banners (no sponsor)
+
+    showNonSponsorBanners();
 
     replaceWideBannerWithImg(wideA, fb.wide, "");
     replaceSquareWithImg(logoBox, fb.square, "");
