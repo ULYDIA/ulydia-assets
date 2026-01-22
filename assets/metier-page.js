@@ -1,47 +1,23 @@
-/* metier-page.v11.1.js — Ulydia
-   - Uses the exact design/markup from propal1-fiche metier.html
-   - Loads Tailwind CDN + Outfit font (only once)
-   - Injects the propal CSS variables/styles (only once)
-   - Reads /assets/catalog.json to set banners (wide + square) for selected ISO
-   - Auto-detects which image is wide vs square by image ratio (prevents inversion)
-
-   Query params:
-     ?iso=FR (default FR)
-     ?slug=analyste-juridique (optional, only used for debug box)
+/* metier-page.v11.2.js — Ulydia (ULTRA-SAFE)
+   - Renders immediately (shows a visible placeholder right away)
+   - Uses propal1 HTML as template (same design target)
+   - Loads Tailwind CDN in background (does NOT block render)
+   - Adds an on-page error overlay if anything fails (no more “silent white screen”)
+   - Applies country banners from /assets/catalog.json
+   - Auto-detect wide vs square by ratio (prevents inversion)
 */
 (() => {
-  if (window.__ULYDIA_METIER_V111__) return;
-  window.__ULYDIA_METIER_V111__ = true;
+  if (window.__ULYDIA_METIER_V112__) return;
+  window.__ULYDIA_METIER_V112__ = true;
 
   const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const CATALOG_URL = `${ASSETS_BASE}/catalog.json`;
 
-  // ---------------------------------------------------------
-  // Helpers
-  // ---------------------------------------------------------
-  function $(sel, root=document) { return root.querySelector(sel); }
-  function $all(sel, root=document) { return Array.from(root.querySelectorAll(sel)); }
-
   function ensureLink(id, href) {
     if (document.getElementById(id)) return;
     const l = document.createElement("link");
-    l.id = id;
-    l.rel = "stylesheet";
-    l.href = href;
+    l.id = id; l.rel = "stylesheet"; l.href = href;
     document.head.appendChild(l);
-  }
-
-  function ensureScript(id, src) {
-    if (document.getElementById(id)) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.id = id;
-      s.src = src;
-      s.async = true;
-      s.onload = () => resolve();
-      s.onerror = (e) => reject(new Error("Failed to load " + src));
-      document.head.appendChild(s);
-    });
   }
 
   function ensureStyle(id, cssText) {
@@ -52,6 +28,41 @@
       document.head.appendChild(st);
     }
     if (!st.textContent || st.textContent.length < 50) st.textContent = cssText;
+  }
+
+  function ensureScript(id, src) {
+    if (document.getElementById(id)) return;
+    const s = document.createElement("script");
+    s.id = id; s.src = src; s.async = true;
+    s.onerror = () => console.warn("[metier.v11.2] failed to load", src);
+    document.head.appendChild(s);
+  }
+
+  function overlayError(title, err) {
+    try {
+      const msg = (err && (err.stack || err.message)) ? (err.stack || err.message) : String(err || "");
+      console.error("[metier.v11.2]", title, err);
+
+      let box = document.getElementById("ulydia-metier-error");
+      if (!box) {
+        box = document.createElement("pre");
+        box.id = "ulydia-metier-error";
+        box.style.position = "fixed";
+        box.style.left = "12px";
+        box.style.right = "12px";
+        box.style.bottom = "12px";
+        box.style.maxHeight = "40vh";
+        box.style.overflow = "auto";
+        box.style.zIndex = "999999";
+        box.style.background = "rgba(17,24,39,.95)";
+        box.style.color = "#fff";
+        box.style.padding = "12px";
+        box.style.borderRadius = "12px";
+        box.style.font = "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+        document.body.appendChild(box);
+      }
+      box.textContent = `[metier-page.v11.2] ${title}\n\n${msg}`;
+    } catch(_) {}
   }
 
   function detectISO() {
@@ -100,19 +111,17 @@
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) {
       const t = await res.text().catch(() => "");
-      throw new Error(`Fetch failed ${res.status} for ${url} :: ${t.slice(0,140)}`);
+      throw new Error(`Fetch failed ${res.status} for ${url} :: ${t.slice(0,160)}`);
     }
     return res.json();
   }
 
   function setBg(el, url) {
-    if (!el) return false;
-    if (url) {
-      el.style.backgroundImage = `url("${url}")`;
-      el.style.backgroundSize = "cover";
-      el.style.backgroundPosition = "center";
-      el.style.backgroundRepeat = "no-repeat";
-    }
+    if (!el || !url) return false;
+    el.style.backgroundImage = `url("${url}")`;
+    el.style.backgroundSize = "cover";
+    el.style.backgroundPosition = "center";
+    el.style.backgroundRepeat = "no-repeat";
     return true;
   }
 
@@ -120,28 +129,33 @@
     return new Promise((resolve) => {
       if (!url) return resolve(0);
       const img = new Image();
-      img.onload = () => {
-        const w = img.naturalWidth || 0;
-        const h = img.naturalHeight || 1;
-        resolve(w / h);
-      };
+      img.onload = () => resolve((img.naturalWidth || 0) / ((img.naturalHeight || 1) || 1));
       img.onerror = () => resolve(0);
       img.src = url;
     });
   }
 
-  // ---------------------------------------------------------
-  // Render propal HTML (exact)
-  // ---------------------------------------------------------
   function ensureRoot() {
     let root = document.getElementById("ulydia-metier-root");
     if (!root) {
       root = document.createElement("div");
       root.id = "ulydia-metier-root";
-      // Important: do NOT wipe the whole body; just add our root at top
       document.body.prepend(root);
     }
     return root;
+  }
+
+  function renderPlaceholder(root) {
+    // Visible even if CSS/Tailwind fails
+    root.innerHTML = `
+      <div style="padding:16px;font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="width:10px;height:10px;border-radius:999px;background:#7c3aed"></div>
+          <div style="font-weight:700">Ulydia — loading metier page…</div>
+        </div>
+        <div style="margin-top:6px;color:#6b7280;font-size:13px">If this stays visible, check Console for errors.</div>
+      </div>
+    `;
   }
 
   function renderShell(root) {
@@ -1246,9 +1260,6 @@
  <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9c15a4f745056984',t:'MTc2ODk4NjI2OS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script>`;
   }
 
-  // ---------------------------------------------------------
-  // Apply catalog banners to propal slots
-  // ---------------------------------------------------------
   async function applyBannersForISO(iso) {
     const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`);
     const countries = data?.countries || [];
@@ -1258,30 +1269,22 @@
     const u1 = pickUrl(c?.banners?.image_1);
     const u2 = pickUrl(c?.banners?.image_2);
 
-    // Decide which is wide (ratio higher)
     const [r1, r2] = await Promise.all([getImageRatio(u1), getImageRatio(u2)]);
     const wideUrl = (r1 >= r2) ? u1 : u2;
     const squareUrl = (r1 >= r2) ? u2 : u1;
 
-    // Wide banner slot (propal)
+    // propal slots:
     const wideA = document.getElementById("sponsor-banner-link");
-    if (wideA) {
-      // In propal, the anchor already has gradient background; we overlay with image if provided
-      setBg(wideA, wideUrl);
-      wideA.style.display = "";
-    }
+    if (wideA) setBg(wideA, wideUrl);
 
-    // Square logo slot (propal)
     const logoA = document.getElementById("sponsor-logo-link");
     const logoBox = logoA ? logoA.querySelector(".sponsor-logo-square") : null;
     if (logoBox) {
       setBg(logoBox, squareUrl);
-      // Hide SVG placeholder if we have an image
       const svg = logoBox.querySelector("svg");
       if (svg && squareUrl) svg.style.display = "none";
     }
 
-    // Optional: set CTA text if present
     const ctaText = String(c?.banners?.cta || "").trim();
     if (ctaText) {
       const btn = document.getElementById("sponsor-cta-btn") || document.querySelector("[data-sponsor-cta]");
@@ -1289,14 +1292,18 @@
     }
   }
 
-  // ---------------------------------------------------------
-  // Boot
-  // ---------------------------------------------------------
-  async function main() {
-    // 1) Head assets (font + tailwind + propal style)
+  function patchDebugBox(iso, slug) {
+    const info = document.getElementById("ulydia-info") || document.querySelector("[data-ulydia-info]");
+    if (info) info.textContent = `ISO: ${iso}\nSlug: ${slug || "-"}`;
+  }
+
+  function boot() {
+    const root = ensureRoot();
+    renderPlaceholder(root);
+
+    // Load assets (non-blocking)
     ensureLink("ulydia-font-outfit", "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap");
-    // Tailwind (required because the propal HTML uses Tailwind utility classes)
-    await ensureScript("ulydia-tailwind", "https://cdn.tailwindcss.com").catch(() => {});
+    ensureScript("ulydia-tailwind", "https://cdn.tailwindcss.com");
     ensureStyle("ulydia-propal-style", `body {
       box-sizing: border-box;
     }
@@ -1640,24 +1647,25 @@
       }
     }`);
 
-    // 2) Render
-    const root = ensureRoot();
-    renderShell(root);
-
-    // 3) Apply country banners
     const iso = detectISO();
-    await applyBannersForISO(iso);
-
-    // 4) Debug box (optional)
     const slug = detectSlug();
-    const info = document.getElementById("ulydia-info") || document.querySelector("[data-ulydia-info]");
-    if (info) {
-      info.textContent = `ISO: ${iso}\nSlug: ${slug || "-"}`;
+    console.log("[metier-page] v11.2 boot", { iso, slug });
+
+    try {
+      renderShell(root);
+    } catch (e) {
+      overlayError("Render shell failed", e);
+      return;
     }
+
+    patchDebugBox(iso, slug);
+
+    applyBannersForISO(iso).catch(e => overlayError("Apply banners failed", e));
   }
 
-  main().catch((e) => {
-    console.error("[metier-page.v11.1] fatal", e);
-    // Never blank the page
-  });
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
 })();
