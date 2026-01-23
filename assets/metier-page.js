@@ -203,138 +203,39 @@ try {
 
 
   function ensureRoot() {
-    // 1) Prefer existing root placeholder
+    // 1) Reuse existing root if present
     let root = document.getElementById("ulydia-metier-root");
     if (root) return root;
 
-    // 2) If template provides a host, reuse it
-    const hostAttr =
-      document.querySelector("[data-ulydia-metier-root]") ||
-      document.querySelector("[data-ulydia-metier-host]");
+    // 2) ✅ EXPLICIT HOST from template (recommended)
+    // Add data-ulydia-metier-host on the container JUST BELOW Header Wrapper
+    const host =
+      document.querySelector('[data-ulydia-metier-host]');
 
-    if (hostAttr) {
-      hostAttr.id = "ulydia-metier-root";
-      return hostAttr;
+    if (host) {
+      host.id = "ulydia-metier-root";
+      return host;
     }
 
-    // 3) Heuristic: adopt template loading placeholder container if present
-    try {
-      const needle = "Chargement de la fiche métier";
-      const candidates = Array.from(document.querySelectorAll("div, section, main")).slice(0, 800);
-      const ph = candidates.find(el => {
-        const t = (el.textContent || "").replace(/\s+/g," ").trim();
-        if (!t.includes(needle)) return false;
-        const r = el.getBoundingClientRect();
-        return r && r.height > 80 && r.width > 200;
-      });
-      if (ph) {
-        ph.id = "ulydia-metier-root";
-        return ph;
-      }
-    } catch(_) {}
-
-    // 4) Create root and insert in a reasonable place
+    // 3) Fallback: create root AFTER header wrapper
     root = document.createElement("div");
     root.id = "ulydia-metier-root";
 
-    const mainEl =
-      document.querySelector("main") ||
-      document.querySelector("[role='main']") ||
-      document.querySelector(".w-dyn-list, .w-dyn-items");
+    const header =
+      document.querySelector('.Header\ Wrapper') ||
+      document.querySelector('.header-wrapper') ||
+      document.querySelector('.w-nav') ||
+      document.querySelector('header');
 
-    if (mainEl) {
-      mainEl.appendChild(root);
+    if (header && header.parentNode) {
+      header.parentNode.insertBefore(root, header.nextSibling);
       return root;
     }
 
-    // Fallback: append to body
+    // 4) Last resort
     (document.body || document.documentElement).appendChild(root);
     return root;
   }
-
-  // ---------------------------------------------------------
-  // Ensure TEMPLATE HEADER is ABOVE the metier page (root placed AFTER header)
-  // Works even if header/root are in different parents.
-  // ---------------------------------------------------------
-  
-  function hideTemplateLoadingPlaceholder(){
-    try{
-      const needle = "Chargement de la fiche métier";
-      const els = Array.from(document.querySelectorAll("body *")).filter(el => {
-        const t = (el.textContent || "").replace(/\s+/g," ").trim();
-        return t && t.includes(needle);
-      });
-      els.forEach(el => {
-        if (el.id !== "ulydia-metier-root") el.style.display = "none";
-      });
-    }catch(_){}
-  }
-
-function getTemplateHeaderEl(){
-    return (
-      document.querySelector("[data-ulydia-header]") ||
-      document.querySelector(".w-nav") ||
-      document.querySelector("nav") ||
-      document.querySelector("[role='banner']") ||
-      document.querySelector(".navbar") ||
-      document.querySelector(".nav") ||
-      document.querySelector("header")
-    );
-  }
-
-  function placeRootAfterTemplateHeader() {
-    const root = document.getElementById("ulydia-metier-root");
-    if (!root) return;
-
-    const header = getTemplateHeaderEl();
-    if (!header || !header.parentNode) return;
-
-    // If root is already after header (in DOM order), do nothing
-    try {
-      const rootAfterHeader = !!(header.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING);
-      if (rootAfterHeader) return;
-    } catch(_) {}
-
-    // Move root right AFTER header (most reliable)
-    header.parentNode.insertBefore(root, header.nextSibling);
-  }
-
-  function placeRootAfterTemplateHeaderRetry() {
-    let tries = 0;
-    (function tick() {
-      tries++;
-      try { placeRootAfterTemplateHeader(); } catch(_) {}
-
-      const header = getTemplateHeaderEl();
-      const root = document.getElementById("ulydia-metier-root");
-
-      // stop if header exists and root is after it
-      if (header && root) {
-        try {
-          const ok = !!(header.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING);
-          if (ok) return;
-        } catch(_) {}
-      }
-      if (tries > 60) return; // ~3s max
-      setTimeout(tick, 50);
-    })();
-  }
-
-
-      const header =
-        document.querySelector("[data-ulydia-header]") ||
-        document.querySelector(".w-nav") ||
-        document.querySelector("header");
-      const root = document.getElementById("ulydia-metier-root");
-
-      // Stop when header exists and is not after root anymore
-      if (header && root && !(root.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING)) return;
-      if (tries > 40) return; // ~2s max
-      setTimeout(tick, 50);
-    })();
-  }
-
-
 
     if (headerEl && headerEl.parentNode) {
       headerEl.parentNode.insertBefore(root, headerEl.nextSibling);
@@ -2146,9 +2047,9 @@ function blocMatches(bloc, slug, iso) {
   }
 
   // ---------- Boot ----------
-  \1    try { hideTemplateLoadingPlaceholder(); } catch(_) {}
-        try { placeRootAfterTemplateHeaderRetry(); } catch(_) {}
-// Keep page blank + show centered loader
+  async function boot() {
+    const root = ensureRoot();
+    // Keep page blank + show centered loader
     try{ root.innerHTML = ""; }catch(_){}
     showLoaderOverlay("Chargement de la fiche métier…");
 
