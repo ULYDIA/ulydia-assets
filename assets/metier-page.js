@@ -203,29 +203,30 @@ try {
 
 
   function ensureRoot() {
-    // 1) Reuse existing root if present
+    // 1) Use existing root if present (BEST)
     let root = document.getElementById("ulydia-metier-root");
     if (root) return root;
 
-    // 2) ✅ EXPLICIT HOST from template (recommended)
-    // Add data-ulydia-metier-host on the container JUST BELOW Header Wrapper
-    const host =
-      document.querySelector('[data-ulydia-metier-host]');
-
+    // 2) ✅ If template provides a host, create the root INSIDE it (never replace the host itself)
+    // Put data-ulydia-metier-host="1" on an EMPTY div under the Header Wrapper, or on a container that should keep its content.
+    const host = document.querySelector('[data-ulydia-metier-host]');
     if (host) {
-      host.id = "ulydia-metier-root";
-      return host;
+      root = document.createElement("div");
+      root.id = "ulydia-metier-root";
+      host.appendChild(root);
+      return root;
     }
 
-    // 3) Fallback: create root AFTER header wrapper
+    // 3) Fallback: create root AFTER the header wrapper (if possible)
     root = document.createElement("div");
     root.id = "ulydia-metier-root";
 
+    // Webflow "Header Wrapper" is TWO classes: .Header and .Wrapper
     const header =
-      document.querySelector('.Header\ Wrapper') ||
-      document.querySelector('.header-wrapper') ||
-      document.querySelector('.w-nav') ||
-      document.querySelector('header');
+      document.querySelector(".Header.Wrapper") ||
+      document.querySelector(".header-wrapper") ||
+      document.querySelector(".w-nav") ||
+      document.querySelector("header");
 
     if (header && header.parentNode) {
       header.parentNode.insertBefore(root, header.nextSibling);
