@@ -1,2 +1,9 @@
+
 /assets/metier-page.js
+  Cache-Control: no-store
+
+/assets/metier-page.v*.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/catalog.json
   Cache-Control: no-store
