@@ -1,3 +1,5 @@
+window.__METIER_PAGE_BUILD__ = "metier-page FULL v2026-01-23.16h40 (catalog strict b1->wide b2->square + lang unavailable overlay)";
+console.log("✅", window.__METIER_PAGE_BUILD__);
 // =========================================================
 // Catalog helpers (countries -> langue_finale + non-sponsor banners)
 // =========================================================
@@ -25,42 +27,6 @@ function normalizeLang(l){
   const s = String(l || "").trim().toLowerCase();
   return (s === "en" || s === "fr" || s === "de" || s === "es" || s === "it") ? s : "";
 }
-
-// Detect whether the payload contains content in a required language.
-// We keep it permissive because Worker/Webflow field naming can vary.
-function jobHasLang(payload, requiredLang){
-  const lang = normalizeLang(requiredLang);
-  if (!lang) return true;
-
-  const m = payload?.metier || payload?.job || payload?.data?.metier || null;
-  if (!m) return false;
-
-  const direct = normalizeLang(m.lang || m.langue || m.language || m.locale || "");
-  if (direct && direct === lang) return true;
-
-  // Known patterns: content_by_lang, translations, or suffix fields
-  const byLang = m.content_by_lang || m.contents || m.translations || m.i18n || null;
-  if (byLang && typeof byLang === "object") {
-    const v = byLang[lang] || byLang[lang.toUpperCase()] || byLang[lang.toLowerCase()] || "";
-    if (v && String(v).trim()) return true;
-  }
-
-  const suffixKeys = [
-    "title_", "name_", "nom_", "accroche_", "tagline_", "description_", "desc_",
-    "overview_", "presentation_", "html_", "content_", "texte_"
-  ];
-  for (const pref of suffixKeys){
-    const v = m[pref + lang];
-    if (v && String(v).replace(/<[^>]*>/g,"").trim()) return true;
-  }
-
-  // Some payloads include arrays of available languages
-  const available = m.available_languages || m.languages || m.langs || null;
-  if (Array.isArray(available) && available.map(x=>normalizeLang(x)).includes(lang)) return true;
-
-  return false;
-}
-
 /* metier-page.v12.9.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
@@ -185,30 +151,30 @@ try {
     if (ov) ov.remove();
   }
 
-  function showMessageOverlay(message, sub){
+
+
+  // ---------------------------------------------------------
+  // Country language not available -> overlay (same design as loader)
+  // ---------------------------------------------------------
+  function showCountryUnavailableOverlay(message){
     injectOverlayStylesOnce();
-    // reuse the same overlay id (replace content)
-    let ov = document.getElementById("ulydia_overlay_loader");
+    let ov = document.getElementById("ulydia_overlay_unavailable");
     if (!ov){
-      // create minimal overlay (same as loader but without spinner by default)
       ov = document.createElement("div");
-      ov.id = "ulydia_overlay_loader";
+      ov.id = "ulydia_overlay_unavailable";
       ov.className = "u-overlay";
+      ov.innerHTML = `
+        <div class="u-overlayCard">
+          <div>
+            <div class="u-overlayTitle" id="ulydia_unavailable_title"></div>
+            <div class="u-overlaySub">Please select another country.</div>
+          </div>
+        </div>`;
       document.body.appendChild(ov);
     }
-    const msg = message || "Sorry, this job is not available in your country at the moment.";
-    const ssub = (sub === undefined) ? "" : String(sub || "");
-    ov.innerHTML = `
-      <div class="u-overlayCard" style="max-width:720px">
-        <div>
-          <div class="u-overlayTitle">${escapeHtml(msg)}</div>
-          ${ssub ? `<div class="u-overlaySub">${escapeHtml(ssub)}</div>` : ``}
-        </div>
-      </div>`;
+    const t = document.getElementById("ulydia_unavailable_title");
+    if (t) t.textContent = message || "Sorry, this job is not available in your country at the moment.";
   }
-
-
-
   function qp() { return new URL(location.href).searchParams; }
   function getISO() {
     const p = qp();
@@ -1697,33 +1663,27 @@ async function resolveCountryBanners(payload, iso) {
   const c = countries.find(x => String(x?.iso || x?.code || "").toUpperCase() === iso) || null;
   if (!c) return { wide:"", square:"", cta:"" };
 
-  // Support multiple naming conventions
-  const u1 = pickUrl(
+  // Support multiple naming conventions (STRICT mapping per spec)
+  // catalog.json:
+  //   - banner_1 : 680x120 => wide (horizontal)
+  //   - banner_2 : 300x300 => square
+  const wide = pickUrl(
     pickFirst(
-      c?.banners?.image_1, c?.banners?.square, c?.banners?.logo_1,
-      c?.banner_1, c?.image_1, c?.square
+      c?.banners?.banner_1, c?.banner_1,
+      c?.banners?.wide, c?.wide,
+      c?.banners?.image_1, c?.image_1,
+      c?.banners?.logo_2, c?.banners?.image_wide, c?.banners?.banner_wide
     )
   );
-  const u2 = pickUrl(
+  const square = pickUrl(
     pickFirst(
-      c?.banners?.image_2, c?.banners?.wide, c?.banners?.logo_2,
-      c?.banner_2, c?.image_2, c?.wide
+      c?.banners?.banner_2, c?.banner_2,
+      c?.banners?.square, c?.square,
+      c?.banners?.image_2, c?.image_2,
+      c?.banners?.logo_1, c?.banners?.image_square, c?.banners?.banner_square
     )
   );
 
-  // If both exist, choose by ratio when possible
-  const ratio = async (u)=> {
-    if(!u) return 0;
-    return new Promise(res=>{
-      const im=new Image();
-      im.onload=()=>res((im.naturalWidth||0)/((im.naturalHeight||1)||1));
-      im.onerror=()=>res(0);
-      im.src=u;
-    });
-  };
-  const [r1,r2] = await Promise.all([ratio(u1), ratio(u2)]);
-  const wide = (r1 >= r2) ? u1 : u2;   // pick the more "wide" ratio
-  const square = (r1 >= r2) ? u2 : u1;
   const cta = String(c?.banners?.cta || c?.cta || "").trim();
   return { wide, square, cta };
 }
@@ -1939,17 +1899,14 @@ if (hasSponsor) {
 
     showNonSponsorBanners();
 
-    const swapFallbackParam = String(p.get("swap_fallback") || "").trim();
-    // ✅ Default behavior: swap fallback mapping (your catalog has the images inverted)
-    //   - wide slot gets the "square" image
-    //   - square slot gets the "wide" image
-    // You can force "no swap" with ?swap_fallback=0
-    const swapFallback = (swapFallbackParam !== "0");
+    const swapFallback = String(p.get("swap_fallback") || "") === "1";
     const compareFallback = String(p.get("compare_fallback") || "") === "1";
 
-    let fw = swapFallback ? (fb.square || "") : (fb.wide || "");
-    let fs = swapFallback ? (fb.wide || "") : (fb.square || "");
-// Default fallback rendering
+    let fw = fb.wide || "";
+    let fs = fb.square || "";
+    if (swapFallback) { const tmp = fw; fw = fs; fs = tmp; }
+
+    // Default fallback rendering
     replaceWideBannerWithImg(wideA, fw, "");
     replaceSquareWithImg(logoBox, fs, "");
     setLinks(fallbackLink);
@@ -2567,24 +2524,31 @@ function blocMatches(bloc, slug, iso) {
 
     const payload = await fetchMetierPayload({ iso, slug });
 
-    const lang = String(payload?.lang || payload?.pays?.langue_finale || payload?.pays?.lang || "").trim().toLowerCase();
+    // Desired language comes from catalog.json (source of truth for country)
+    const countryMeta = await getCountryMeta(iso);
+    const desiredLang = normalizeLang(
+      countryMeta?.langue_finale || countryMeta?.langue || countryMeta?.lang ||
+      payload?.pays?.langue_finale || payload?.pays?.lang || payload?.lang || ""
+    ) || "fr";
 
-    // ---------------------------------------------------------
-    // Country language gate (CMS may not have the job in that language)
-    // If the country requires a language not returned by the CMS/Worker, show a centered message.
-    // ---------------------------------------------------------
-    const requiredLang = desiredLang; // from catalog.json (langue_finale)
-    const hasJob = !!(payload && (payload.metier || payload.job || payload.item));
-    if (requiredLang) {
-      const gotLang = normalizeLang(lang);
-      // if worker did not return the job, or returned a different language than required
-      if (!hasJob || !jobHasLang(payload, requiredLang) || (gotLang && gotLang !== requiredLang)) {
-        hideLoaderOverlay();
-        showMessageOverlay("Sorry, this job is not available in your country at the moment.");
-        return;
-      }
+    // Metier language (from CMS item)
+    const m0 = payload?.metier || payload?.job || payload?.item || payload || null;
+    const f0 = m0 ? (m0.fieldData || m0.fields || m0) : {};
+    const metierLang = normalizeLang(
+      f0?.lang || f0?.langue || f0?.language || f0?.Lang || f0?.Langue || ""
+    );
+
+    // If the metier is not available for the country's language (ex: country=ES but CMS has no ES items)
+    // show an "unavailable" overlay (same design as loader) and stop rendering.
+    if ((desiredLang && metierLang && desiredLang !== metierLang) || (desiredLang !== "fr" && !metierLang)) {
+      hideLoaderOverlay();
+      showCountryUnavailableOverlay("Sorry, this job is not available in your country at the moment.");
+      // keep root empty (no wrong-language content)
+      return;
     }
 
+    // Backward compat: keep `lang` variable used elsewhere
+    const lang = desiredLang;
 
     // Sponsor
     applySponsor({ iso, slug, payload }).catch(e => overlayError("Apply sponsor failed", e));
