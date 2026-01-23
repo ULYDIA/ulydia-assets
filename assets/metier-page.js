@@ -203,29 +203,38 @@ try {
 
 
   function ensureRoot() {
-    // Prefer the placeholder already present in Webflow
+    // 1) If template already has a dedicated root, use it (RECOMMENDED)
     let root = document.getElementById("ulydia-metier-root");
     if (root) return root;
 
-    // Create it (but insert at the RIGHT place: after Webflow header / inside main)
+    // 2) If you mark a host container under the header, use it
+    const host = document.querySelector('[data-ulydia-metier-host]');
+    if (host) {
+      root = document.createElement("div");
+      root.id = "ulydia-metier-root";
+      host.appendChild(root);
+      return root;
+    }
+
+    // 3) Otherwise, create root and insert it JUST AFTER the template header.
     root = document.createElement("div");
     root.id = "ulydia-metier-root";
 
+    // Header Wrapper = two classes in Webflow: "Header" and "Wrapper"
     const headerEl =
-      document.querySelector("[data-ulydia-header]") ||
+      document.querySelector(".Header.Wrapper") ||
       document.querySelector(".w-nav") ||
       document.querySelector("header");
 
-    const mainEl =
-      document.querySelector("[data-ulydia-metier-host]") ||
-      document.querySelector("main") ||
-      document.querySelector("[role='main']") ||
-      document.querySelector(".w-dyn-list, .w-dyn-items");
-
-    if (mainEl) {
-      mainEl.appendChild(root);
+    if (headerEl && headerEl.parentNode) {
+      headerEl.parentNode.insertBefore(root, headerEl.nextSibling);
       return root;
     }
+
+    // 4) Last resort: append to body (but NEVER prepend)
+    (document.body || document.documentElement).appendChild(root);
+    return root;
+  }
 
     if (headerEl && headerEl.parentNode) {
       headerEl.parentNode.insertBefore(root, headerEl.nextSibling);
