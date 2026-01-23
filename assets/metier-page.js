@@ -227,6 +227,50 @@ try {
       return root;
     }
 
+
+  // ---------------------------------------------------------
+  // Force Webflow header ABOVE the metier page root
+  // (Some templates may place header after main; this fixes DOM order safely)
+  // ---------------------------------------------------------
+  function fixHeaderAboveMetier() {
+    const root = document.getElementById("ulydia-metier-root");
+    if (!root) return;
+
+    const header =
+      document.querySelector("[data-ulydia-header]") ||
+      document.querySelector(".w-nav") ||
+      document.querySelector("header");
+
+    if (!header || !header.parentNode) return;
+
+    // If header is AFTER the root in DOM, move it just before root
+    const headerAfterRoot = !!(root.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING);
+    if (headerAfterRoot) {
+      root.parentNode.insertBefore(header, root);
+    }
+  }
+
+  function fixHeaderAboveMetierRetry() {
+    let tries = 0;
+    (function tick() {
+      tries++;
+      try { fixHeaderAboveMetier(); } catch(_) {}
+
+      const header =
+        document.querySelector("[data-ulydia-header]") ||
+        document.querySelector(".w-nav") ||
+        document.querySelector("header");
+      const root = document.getElementById("ulydia-metier-root");
+
+      // Stop when header exists and is not after root anymore
+      if (header && root && !(root.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING)) return;
+      if (tries > 40) return; // ~2s max
+      setTimeout(tick, 50);
+    })();
+  }
+
+
+
     if (headerEl && headerEl.parentNode) {
       headerEl.parentNode.insertBefore(root, headerEl.nextSibling);
       return root;
@@ -2039,7 +2083,8 @@ function blocMatches(bloc, slug, iso) {
   // ---------- Boot ----------
   async function boot() {
     const root = ensureRoot();
-    // Keep page blank + show centered loader
+        try { fixHeaderAboveMetierRetry(); } catch(_) {}
+// Keep page blank + show centered loader
     try{ root.innerHTML = ""; }catch(_){}
     showLoaderOverlay("Chargement de la fiche métier…");
 
