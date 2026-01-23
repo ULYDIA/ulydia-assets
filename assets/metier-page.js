@@ -154,19 +154,19 @@ try {
   }
 
   function getISOFromParams() {
-    const p = qp();
+    // ✅ Canonical: use ?country=XX (like the Webflow template)
+    // Backward-compat: still accept ?iso=XX
+    const qp = new URLSearchParams(location.search);
 
-    // explicit iso always wins
-    const isoExplicit = String(p.get("iso") || "").trim().toUpperCase();
-    if (isoExplicit) return isoExplicit;
+    const fromCountry = String(qp.get("country") || "").trim().toUpperCase();
+    if (fromCountry && /^[A-Z]{2}$/.test(fromCountry)) return fromCountry;
 
-    const raw = String(p.get("country") || "").trim();
-    const v = raw.toUpperCase();
+    const fromIso = String(qp.get("iso") || "").trim().toUpperCase();
+    if (fromIso && /^[A-Z]{2}$/.test(fromIso)) return fromIso;
 
-    // If country=EN and no iso param => it's a language, not an ISO
-    if (raw && raw.length === 2 && KNOWN_LANGS.has(raw.toLowerCase())) return "";
-
-    return v;
+    // If someone mistakenly put a language into ?country (ex: country=en),
+    // do NOT treat it as ISO.
+    return "";
   }
 
   async function detectVisitorISO() {
@@ -1806,7 +1806,11 @@ function setLinks(linkUrl){
       });
     }
 
-const fb = await resolveCountryBanners(iso, payload, lang);
+const countryMeta = resolveCountryFromCatalog(payload, iso);
+    const countryMeta = resolveCountryFromCatalog(payload, iso);
+    const bannerLang = String(countryMeta?.langue_finale || countryMeta?.lang || lang || "en").toLowerCase();
+
+    const fb = await resolveCountryBanners(iso, payload, bannerLang);
     const fallbackLink = `/sponsor?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
 
     // 1) Preview
@@ -1827,6 +1831,11 @@ const fb = await resolveCountryBanners(iso, payload, lang);
     // 2) Webflow metier fields (ROBUST mapping: supports Webflow slugged keys)
     const m = payload?.metier || payload?.job || payload?.item || payload || {};
     const f = m?.fieldData || m?.fields || m || {};
+    const hasMetier = !!(String(m?.slug || f?.slug || "").trim() || String(f?.name || f?.nom || "").trim());
+    if (!hasMetier) {
+      showNotAvailable(bannerLang);
+      return;
+    }
 
     function pickFirst(obj, keys){
       for (const k of keys){
@@ -2126,6 +2135,48 @@ function blocMatches(bloc, slug, iso) {
   }
 
   // ---------- Boot ----------
+
+  // =========================================================
+  // Not available message (when we don't have the metier in the country's final language yet)
+  // =========================================================
+  function showNotAvailable(lang) {
+    const L = String(lang || "en").toLowerCase();
+    const messages = {
+      en: "Sorry — this job profile is not available for this country yet.",
+      fr: "Désolé — cette fiche n'est pas encore disponible pour ce pays.",
+      de: "Entschuldigung – dieses Berufsprofil ist für dieses Land derzeit noch nicht verfügbar.",
+      es: "Lo sentimos: esta ficha aún no está disponible para este país.",
+      it: "Spiacenti: questa scheda non è ancora disponibile per questo Paese."
+    };
+    const msg = messages[L] || messages.en;
+
+    // Hide content sections if present
+    try { const s = document.getElementById("sections-root"); if (s) s.style.display = "none"; } catch(e){}
+    try { const side = document.getElementById("side-card"); if (side) side.style.display = "none"; } catch(e){}
+    try { const heroImg = document.getElementById("hero-image"); if (heroImg) heroImg.style.display = "none"; } catch(e){}
+
+    // Inject a notice card under the hero text
+    const anchor = document.getElementById("accroche-metier") || document.getElementById("nom-metier") || ROOT;
+    if (!anchor) return;
+
+    let box = document.getElementById("ul-not-available");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "ul-not-available";
+      box.style.marginTop = "14px";
+      box.style.padding = "14px 16px";
+      box.style.border = "1px solid rgba(15,23,42,0.10)";
+      box.style.borderRadius = "14px";
+      box.style.background = "rgba(99,102,241,0.06)";
+      box.style.color = "#0f172a";
+      box.style.fontSize = "14px";
+      box.style.lineHeight = "1.45";
+      anchor.parentNode.insertBefore(box, anchor.nextSibling);
+    }
+    box.textContent = msg;
+  }
+
+
   async function boot() {
     const root = ensureRoot();
     // Keep page blank + show centered loader
