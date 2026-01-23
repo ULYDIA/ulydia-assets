@@ -1,32 +1,3 @@
-
-/* Ajout du loader */
-
-<div id="page-loader" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; display: flex; justify-content: center; align-items: center; z-index: 9999;">
-  <div class="loader"></div>
-</div>
-
-
-<style>
-.loader {
-  border: 5px solid #f3f3f3;
-  border-top: 5px solid #3498db;
-  border-radius: 50%;
-  width: 50px;
-  height: 50px;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-</style>
-<script>
-  window.addEventListener('load', function() {
-    document.getElementById('page-loader').style.display = 'none';
-  });
-</script>
 /* metier-page.v12.9.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
@@ -77,6 +48,7 @@
     try {
       const msg = err ? (err.stack || err.message || String(err)) : "";
       console.error("[metier.v12.4]", title, err);
+      try{ hideLoaderOverlay(); }catch(_){}
 
 try {
   const h1 = document.getElementById("metier-title") || document.querySelector("h1");
@@ -105,6 +77,51 @@ try {
       box.textContent = `[metier-page.v12.8] ${title}\n\n${msg}`;
     } catch(_) {}
   }
+
+
+  // ---------------------------------------------------------
+  // Centered loader overlay (white page background)
+  // ---------------------------------------------------------
+  function injectOverlayStylesOnce(){
+    if (document.getElementById("ulydia_loader_styles")) return;
+    const st = document.createElement("style");
+    st.id = "ulydia_loader_styles";
+    st.textContent = `
+      .u-overlay{position:fixed;inset:0;z-index:999998;background:#fff;display:flex;align-items:center;justify-content:center}
+      .u-overlayCard{display:flex;align-items:center;gap:14px;padding:18px 22px;border:1px solid rgba(15,23,42,.12);border-radius:16px;box-shadow:0 10px 30px rgba(2,6,23,.08);background:#fff}
+      .u-spinner{width:22px;height:22px;border-radius:999px;border:3px solid rgba(99,102,241,.25);border-top-color:rgba(99,102,241,1);animation:uSpin 900ms linear infinite}
+      .u-overlayTitle{font-weight:700;color:#0f172a;font-family:var(--font-family, system-ui, -apple-system, Segoe UI, Roboto, Arial)}
+      .u-overlaySub{margin-top:2px;font-size:12px;color:#64748b;font-family:var(--font-family, system-ui, -apple-system, Segoe UI, Roboto, Arial)}
+      @keyframes uSpin{to{transform:rotate(360deg)}}
+    `;
+    document.head.appendChild(st);
+  }
+
+  function showLoaderOverlay(message){
+    injectOverlayStylesOnce();
+    let ov = document.getElementById("ulydia_overlay_loader");
+    if (!ov){
+      ov = document.createElement("div");
+      ov.id = "ulydia_overlay_loader";
+      ov.className = "u-overlay";
+      ov.innerHTML = `
+        <div class="u-overlayCard">
+          <div class="u-spinner"></div>
+          <div>
+            <div class="u-overlayTitle" id="ulydia_overlay_title"></div>
+            <div class="u-overlaySub">Please wait a moment.</div>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+    }
+    const t = document.getElementById("ulydia_overlay_title");
+    if (t) t.textContent = message || "Loading…";
+  }
+  function hideLoaderOverlay(){
+    const ov = document.getElementById("ulydia_overlay_loader");
+    if (ov) ov.remove();
+  }
+
 
   function qp() { return new URL(location.href).searchParams; }
   function getISO() {
@@ -1402,6 +1419,17 @@ try {
   // ---------- Sponsor rendering (single <img>, no overlay) ----------
   function replaceWideBannerWithImg(wideA, wideUrl, fallbackUrl) {
     if (!wideA) return;
+    // Force same dimensions for sponsor & non-sponsor
+    try{
+      wideA.style.width = "100%";
+      wideA.style.maxWidth = "680px";
+      wideA.style.height = "120px";
+      wideA.style.borderRadius = "16px";
+      wideA.style.overflow = "hidden";
+      wideA.style.display = "block";
+      wideA.style.marginLeft = "auto";
+      wideA.style.marginRight = "auto";
+    }catch(_){}
     wideA.classList.add("ul-has-banner-img");
     wideA.style.backgroundImage = "none";
     if (!wideUrl) {
@@ -1424,6 +1452,16 @@ try {
   }
   function replaceSquareWithImg(logoBox, squareUrl, fallbackUrl) {
     if (!logoBox) return;
+    // Force same dimensions for sponsor & non-sponsor
+    try{
+      logoBox.style.width = "100%";
+      logoBox.style.maxWidth = "300px";
+      logoBox.style.height = "300px";
+      logoBox.style.borderRadius = "16px";
+      logoBox.style.overflow = "hidden";
+      logoBox.style.marginLeft = "auto";
+      logoBox.style.marginRight = "auto";
+    }catch(_){}
     logoBox.style.backgroundImage = "none";
     if (!squareUrl) { logoBox.innerHTML = ""; return; }
     const safe = squareUrl.replace(/"/g, "&quot;");
@@ -1729,11 +1767,70 @@ if (hasSponsor) {
 
     showNonSponsorBanners();
 
-    replaceWideBannerWithImg(wideA, fb.wide, "");
-    replaceSquareWithImg(logoBox, fb.square, "");
+    const swapFallback = String(p.get("swap_fallback") || "") === "1";
+    const compareFallback = String(p.get("compare_fallback") || "") === "1";
+
+    let fw = fb.wide || "";
+    let fs = fb.square || "";
+    if (swapFallback) { const tmp = fw; fw = fs; fs = tmp; }
+
+    // Default fallback rendering
+    replaceWideBannerWithImg(wideA, fw, "");
+    replaceSquareWithImg(logoBox, fs, "");
     setLinks(fallbackLink);
     setNames("");
     if (fb.cta && ctaBtn) ctaBtn.textContent = fb.cta;
+
+    // Optional comparison mode: duplicate + render swapped mapping to visually confirm
+    if (compareFallback) {
+      try{
+        // --- Wide duplicate (below the main wide banner) ---
+        const wideWrap = wideA.parentElement;
+        if (wideWrap && !document.getElementById("ulydia-wide-compare")) {
+          const lab = document.createElement("div");
+          lab.id = "ulydia-wide-compare";
+          lab.style.marginTop = "10px";
+          lab.style.fontSize = "12px";
+          lab.style.color = "var(--muted,#64748b)";
+          lab.textContent = "Comparaison fallback: mapping inversé (debug)";
+          wideWrap.insertBefore(lab, wideA.nextSibling);
+
+          const wideA2 = wideA.cloneNode(false);
+          wideA2.id = "sponsor-banner-link-fallback-swap";
+          wideWrap.insertBefore(wideA2, lab.nextSibling);
+
+          // swapped rendering for compare (always the opposite)
+          const w2 = fs || "";
+          replaceWideBannerWithImg(wideA2, w2, "");
+          // keep same click target
+          wideA2.href = fallbackLink;
+        }
+
+        // --- Square duplicate (below the main square box) ---
+        const side = logoBox.parentElement;
+        if (side && !document.getElementById("ulydia-square-compare")) {
+          const lab2 = document.createElement("div");
+          lab2.id = "ulydia-square-compare";
+          lab2.style.marginTop = "10px";
+          lab2.style.fontSize = "12px";
+          lab2.style.color = "var(--muted,#64748b)";
+          lab2.textContent = "Comparaison fallback: mapping inversé (debug)";
+          side.appendChild(lab2);
+
+          const box2 = document.createElement("div");
+          box2.style.width = "100%";
+          box2.style.maxWidth = "300px";
+          box2.style.height = "300px";
+          box2.style.borderRadius = "16px";
+          box2.style.overflow = "hidden";
+          box2.style.margin = "10px auto 0";
+          side.appendChild(box2);
+
+          const s2 = fw || "";
+          replaceSquareWithImg(box2, s2, "");
+        }
+      }catch(_){}
+    }
   }
 
   // ---------- FAQ ----------
@@ -1926,7 +2023,9 @@ function blocMatches(bloc, slug, iso) {
   // ---------- Boot ----------
   async function boot() {
     const root = ensureRoot();
-    renderPlaceholder(root);
+    // Keep page blank + show centered loader
+    try{ root.innerHTML = ""; }catch(_){}
+    showLoaderOverlay("Chargement de la fiche métier…");
 
     ensureLink("ulydia-font-outfit", "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap");
     ensureScript("ulydia-tailwind", "https://cdn.tailwindcss.com");
@@ -2372,36 +2471,11 @@ function blocMatches(bloc, slug, iso) {
 
     const faqFiltered = Array.isArray(faqList) ? faqList.filter(faqMatches) : [];
     renderFAQ(faqFiltered);
-  }
+  
+    // Done
+    hideLoaderOverlay();
+}
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
   else boot().catch(e => overlayError("Boot failed", e));
 })();
-<script>
-  // Fonction pour inverser les formats des bannières
-  function invertBannerFormats() {
-    const wideBanners = document.querySelectorAll('.sponsor-banner-wide');
-    const squareBanners = document.querySelectorAll('.sponsor-banner-square');
-
-    wideBanners.forEach(banner => {
-      const clone = banner.cloneNode(true);
-      clone.classList.remove('sponsor-banner-wide');
-      clone.classList.add('sponsor-banner-square-inverted');
-      clone.style.width = '300px';
-      clone.style.height = '300px';
-      banner.parentNode.appendChild(clone);
-    });
-
-    squareBanners.forEach(banner => {
-      const clone = banner.cloneNode(true);
-      clone.classList.remove('sponsor-banner-square');
-      clone.classList.add('sponsor-banner-wide-inverted');
-      clone.style.width = '100%';
-      clone.style.height = '200px';
-      banner.parentNode.appendChild(clone);
-    });
-  }
-
-  // Appel de la fonction après le chargement de la page
-  window.addEventListener('DOMContentLoaded', invertBannerFormats);
-</script>
