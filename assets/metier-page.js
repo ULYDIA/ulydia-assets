@@ -7,7 +7,7 @@
 */
 
 (() => {
-  const VERSION = "fullroot-v2.1";
+  const VERSION = "stable-v2.2";
   const GUARD = "__ULYDIA_METIER_PAGE_FULLROOT_V2__";
   if (window[GUARD]) return;
   window[GUARD] = true;
@@ -88,6 +88,7 @@
       .ul-metier .ul-body p{margin:0 0 10px}
       .ul-metier .ul-body ul{margin:10px 0 0;padding-left:18px}
       .ul-metier .ul-body li{margin:6px 0}
+      .ul-metier .ul-body strong{color:inherit;font-weight:700}
       .ul-metier .ul-side{display:flex;flex-direction:column;gap:14px}
       .ul-metier .ul-banner-square{border-radius:18px;overflow:hidden;border:1px solid rgba(15,23,42,.08);background:#f8fafc}
       .ul-metier .ul-banner-square a{display:block;width:100%;height:270px;background-size:cover;background-position:center}
@@ -204,6 +205,34 @@
     }
     return out.map(s => String(s||"").trim()).filter(Boolean);
   }
+  function isProbablyImageUrl(s){
+    s = String(s || "").trim();
+    if (!/^https?:\/\//i.test(s)) return false;
+    if (/\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(s)) return true;
+    if (/website-files\.com/i.test(s)) return true;
+    return true;
+  }
+
+  function deepCollectImageUrls(obj, out, seen, depth){
+    if (!obj || depth > 6) return;
+    if (typeof obj === "string") {
+      const s = obj.trim();
+      if (s && isProbablyImageUrl(s) && !seen.has(s)) { seen.add(s); out.push(s); }
+      return;
+    }
+    if (Array.isArray(obj)) {
+      obj.forEach(v => deepCollectImageUrls(v, out, seen, depth+1));
+      return;
+    }
+    if (typeof obj === "object") {
+      if (typeof obj.url === "string") deepCollectImageUrls(obj.url, out, seen, depth+1);
+      for (const k in obj) {
+        if (!Object.prototype.hasOwnProperty.call(obj,k)) continue;
+        deepCollectImageUrls(obj[k], out, seen, depth+1);
+      }
+    }
+  }
+
 
   function collectFallbackCandidates(payload){
     const pays = payload?.pays || {};
@@ -243,6 +272,16 @@
     for (const p of paths) {
       const v = deepGet({ pays, meta, banners: payload?.banners }, p);
       urls.push(...extractUrlsFromAny(v));
+    }
+
+
+    // If still empty, do a deep scan over pays/meta for any image URLs
+    if (!urls.length) {
+      const out = [];
+      const seen = new Set();
+      deepCollectImageUrls(pays, out, seen, 0);
+      deepCollectImageUrls(meta, out, seen, 0);
+      urls.push(...out);
     }
 
     // de-dup
@@ -296,7 +335,7 @@
     root.innerHTML = `
       <div class="ul-metier">
         <div class="ul-wrap">
-          <div class="ul-loading">
+          <div class="ul-loading" style="min-height:35vh;align-items:center;">
             <div class="ul-dot"></div>
             <div>
               <div style="font-weight:800">Chargement de la fiche métier…</div>
@@ -448,8 +487,8 @@
       const okWide = setBanner(wideA, mapped.wide);
       const okSq   = setBanner(squareA, mapped.square);
 
-      if (!okWide) hide(wideWrap);
-      if (!okSq) hide(squareWrap);
+      if (!okWide) { wideA.style.backgroundImage="none"; wideA.style.height="80px"; wideA.style.display="flex"; wideA.style.alignItems="center"; wideA.style.justifyContent="center"; wideA.style.color="rgba(15,23,42,.65)"; wideA.style.fontWeight="700"; wideA.textContent="Vous désirez sponsoriser ce métier ?"; }
+      if (!okSq) { squareA.style.backgroundImage="none"; squareA.style.height="200px"; squareA.style.display="flex"; squareA.style.alignItems="center"; squareA.style.justifyContent="center"; squareA.style.color="rgba(15,23,42,.65)"; squareA.style.fontWeight="700"; squareA.textContent="Sponsor"; }
 
       wideA?.removeAttribute("href");
       squareA?.removeAttribute("href");
