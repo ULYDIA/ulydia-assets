@@ -124,17 +124,84 @@ try {
 
 
   function qp() { return new URL(location.href).searchParams; }
-  function getISO() {
-    const p = qp();
-    const iso = String(p.get("country") || p.get("iso") || "").trim().toUpperCase();
-    return iso || "FR";
-  }
+
+  // ---------------------------------------------------------
+  // URL params
+  // - country / iso : ISO2 country (FR, GB, ES...)
+  // - lang          : language override (fr, en, es...)
+  // Backward compat:
+  // - if country looks like a language code (EN/FR/ES/...) and iso is missing,
+  //   treat it as lang override and resolve ISO via visitor / default.
+  // ---------------------------------------------------------
+  const KNOWN_LANGS = new Set(["en","fr","es","it","de","pt","nl","pl","sv","no","da","fi","cs","sk","hu","ro","bg","el","tr","ar","he","ru","uk","zh","ja","ko"]);
+
   function getSlug() {
     const p = qp();
     return String(p.get("metier") || p.get("slug") || "").trim();
   }
 
-  function pickFirst(...vals) {
+  function getLangOverride() {
+    const p = qp();
+    const raw = String(p.get("lang") || p.get("language") || "").trim();
+    if (raw) return raw.toLowerCase();
+
+    // Back-compat: country=EN used mistakenly as language
+    const c = String(p.get("country") || "").trim().toLowerCase();
+    const isoParam = String(p.get("iso") || "").trim();
+    if (!isoParam && c && c.length === 2 && KNOWN_LANGS.has(c)) return c;
+
+    return "";
+  }
+
+  function getISOFromParams() {
+    const p = qp();
+
+    // explicit iso always wins
+    const isoExplicit = String(p.get("iso") || "").trim().toUpperCase();
+    if (isoExplicit) return isoExplicit;
+
+    const raw = String(p.get("country") || "").trim();
+    const v = raw.toUpperCase();
+
+    // If country=EN and no iso param => it's a language, not an ISO
+    if (raw && raw.length === 2 && KNOWN_LANGS.has(raw.toLowerCase())) return "";
+
+    return v;
+  }
+
+  async function detectVisitorISO() {
+    // 1) cached
+    try {
+      const cached = String(localStorage.getItem("ulydia_iso") || "").trim().toUpperCase();
+      if (cached && cached.length === 2) return cached;
+    } catch(_) {}
+
+    // 2) ipinfo (if token provided)
+    const token = String(window.ULYDIA_IPINFO_TOKEN || "").trim();
+    if (token) {
+      try {
+        const r = await fetch(`https://ipinfo.io/json?token=${encodeURIComponent(token)}`, { cache: "no-store" });
+        if (r.ok) {
+          const j = await r.json();
+          const iso = String(j?.country || "").trim().toUpperCase();
+          if (iso && iso.length === 2) {
+            try { localStorage.setItem("ulydia_iso", iso); } catch(_) {}
+            return iso;
+          }
+        }
+      } catch(_) {}
+    }
+
+    // 3) default
+    return "FR";
+  }
+
+  async function resolveISO() {
+    const iso = getISOFromParams();
+    if (iso) return iso;
+    return await detectVisitorISO();
+  }
+function pickFirst(...vals) {
     for (const v of vals) {
       if (v === undefined || v === null) continue;
       if (typeof v === "string" && v.trim() === "") continue;
@@ -1420,11 +1487,16 @@ try {
   }
 
   // ---------- Worker ----------
-  async function fetchMetierPayload({ iso, slug }) {
+  async function fetchMetierPayload({ iso, slug, lang }) {
     if (!slug) return null;
     const url = new URL(`${WORKER_URL}/v1/metier-page`);
     url.searchParams.set("iso", iso);
     url.searchParams.set("slug", slug);
+    if (lang) {
+      const L = String(lang).trim().toLowerCase();
+      url.searchParams.set("lang", L);
+      url.searchParams.set("language", L);
+    }
     url.searchParams.set("proxy_secret", PROXY_SECRET);
     return fetchJSON(url.toString()).catch((e) => {
       console.warn("[metier.v12.4] worker payload failed", e);
@@ -1495,10 +1567,27 @@ try {
   }
 
   
-async function resolveCountryBanners(iso, payload) {
+async function resolveCountryBanners(iso, payload, langOverride) {
   // 1) Prefer banners coming from the Worker payload (single source of truth)
   const pPays = payload?.pays || payload?.country || payload?.paysData || null;
   const pB = pPays?.banners || pPays?.banner || payload?.banners || null;
+
+
+  const lang = String(
+    langOverride || payload?.lang || pPays?.langue_finale || pPays?.lang || ""
+  ).trim().toLowerCase();
+
+  // If banners are grouped by language (e.g. banners.en / banners.fr), pick the right one
+  let pB2 = pB;
+  try{
+    if (pB2 && typeof pB2 === "object" && !Array.isArray(pB2) && lang && pB2[lang] && typeof pB2[lang] === "object") {
+      pB2 = pB2[lang];
+    }
+    if (!pB2 && pPays && typeof pPays === "object") {
+      const byLang = pPays?.banners_by_lang || pPays?.bannersByLang || pPays?.banners_lang || null;
+      if (byLang && typeof byLang === "object" && lang && byLang[lang]) pB2 = byLang[lang];
+    }
+  } catch(_){}
 
   const pick = (...vals) => pickUrl(pickFirst(...vals));
 
@@ -1506,33 +1595,33 @@ async function resolveCountryBanners(iso, payload) {
   // Build candidate lists (Webflow field naming is sometimes inconsistent, so we choose by aspect ratio)
   const wideCandidates = [
     pick(
-      pB?.wide, pB?.banner_wide, pB?.image_wide, pB?.imageWide,
+      pB2?.wide, pB2?.banner_wide, pB2?.image_wide, pB2?.imageWide,
       pPays?.banner_wide, pPays?.banniere_wide, pPays?.banniere_2, pPays?.image_2,
       payload?.banner_wide, payload?.banniere_wide
     ),
     // sometimes stored in logo_1
     pick(
-      pB?.logo_2, pB?.image_2, pPays?.image_2,
-      pB?.logo_1, pB?.image_1, pPays?.image_1,
+      pB2?.logo_2, pB2?.image_2, pPays?.image_2,
+      pB2?.logo_1, pB2?.image_1, pPays?.image_1,
       pPays?.banniere_1, pPays?.banniere_2
     )
   ].filter(Boolean);
 
   const squareCandidates = [
     pick(
-      pB?.square, pB?.banner_square, pB?.image_square, pB?.imageSquare,
+      pB2?.square, pB2?.banner_square, pB2?.image_square, pB2?.imageSquare,
       pPays?.banner_square, pPays?.banniere_square, pPays?.banniere_1, pPays?.image_1,
       payload?.banner_square, payload?.banniere_square
     ),
     // sometimes stored in logo_2
     pick(
-      pB?.logo_1, pB?.image_1, pPays?.image_1,
-      pB?.logo_2, pB?.image_2, pPays?.image_2,
+      pB2?.logo_1, pB2?.image_1, pPays?.image_1,
+      pB2?.logo_2, pB2?.image_2, pPays?.image_2,
       pPays?.banniere_1, pPays?.banniere_2
     )
   ].filter(Boolean);
 
-  const fromPayloadCTA = String(pB?.cta || pPays?.cta || "").trim();
+  const fromPayloadCTA = String(pB2?.cta || pPays?.cta || "").trim();
 
   async function measure(url){
     return await new Promise((resolve) => {
@@ -1630,7 +1719,7 @@ async function resolveCountryBanners(iso, payload) {
   return { wide, square, cta };
 }
 
-  async function applySponsor({ iso, slug, payload }) {
+  async function applySponsor({ iso, slug, payload, lang }) {
     const p = qp();
     const isPreview = String(p.get("preview") || "") === "1";
 
@@ -1717,7 +1806,7 @@ function setLinks(linkUrl){
       });
     }
 
-const fb = await resolveCountryBanners(iso, payload);
+const fb = await resolveCountryBanners(iso, payload, lang);
     const fallbackLink = `/sponsor?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
 
     // 1) Preview
@@ -2392,9 +2481,10 @@ function blocMatches(bloc, slug, iso) {
       .ul-has-banner-img > img { display:block !important; }
     `);
 
-    const iso = getISO();
+    const iso = await resolveISO();
+    const langOverride = getLangOverride();
     const slug = getSlug();
-    console.log("[metier-page] v12.9 boot", { iso, slug });
+    console.log("[metier-page] v12.9 boot", { iso, slug, langOverride });
 
     try { renderShell(root); }
     catch (e) { overlayError("Render shell failed", e); return; }
@@ -2402,12 +2492,12 @@ function blocMatches(bloc, slug, iso) {
     // MUST happen immediately after shell render (prevents placeholders)
     killTemplatePlaceholdersNow();
 
-    const payload = await fetchMetierPayload({ iso, slug });
+    const payload = await fetchMetierPayload({ iso, slug, lang: langOverride });
 
     const lang = String(payload?.lang || payload?.pays?.langue_finale || payload?.pays?.lang || "").trim().toLowerCase();
 
     // Sponsor
-    applySponsor({ iso, slug, payload }).catch(e => overlayError("Apply sponsor failed", e));
+    applySponsor({ iso, slug, payload, lang: langOverride }).catch(e => overlayError("Apply sponsor failed", e));
 
     // Standard metier content
     const m = payload?.metier || payload?.job || payload?.item || payload || null;
