@@ -1,3 +1,32 @@
+
+/* Ajout du loader */
+
+<div id="page-loader" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: white; display: flex; justify-content: center; align-items: center; z-index: 9999;">
+  <div class="loader"></div>
+</div>
+
+
+<style>
+.loader {
+  border: 5px solid #f3f3f3;
+  border-top: 5px solid #3498db;
+  border-radius: 50%;
+  width: 50px;
+  height: 50px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+</style>
+<script>
+  window.addEventListener('load', function() {
+    document.getElementById('page-loader').style.display = 'none';
+  });
+</script>
 /* metier-page.v12.9.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
@@ -77,73 +106,7 @@ try {
     } catch(_) {}
   }
 
-  
-  // ---------- Loader overlay (white page + centered spinner) ----------
-  function ensureLoaderStyles(){
-    ensureStyle("ulydia-metier-loader-css", `
-      #ulydia_overlay_loader_simple{
-        position: fixed;
-        inset: 0;
-        background: #fff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 999998;
-      }
-      .ul-loader-card{
-        display:flex;
-        flex-direction:column;
-        align-items:center;
-        gap: 14px;
-        padding: 24px 18px;
-        text-align:center;
-      }
-      .ul-loader-spin{
-        width: 42px;
-        height: 42px;
-        border-radius: 50%;
-        border: 4px solid rgba(0,0,0,0.08);
-        border-top-color: rgba(99,102,241,1);
-        animation: ulspin 0.9s linear infinite;
-      }
-      @keyframes ulspin { to { transform: rotate(360deg); } }
-      .ul-loader-title{
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-        font-weight: 700;
-        font-size: 16px;
-        color: #0f172a;
-      }
-      .ul-loader-sub{
-        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-        font-size: 13px;
-        color: #64748b;
-      }
-    `);
-  }
-  function showLoaderOverlay(message){
-    ensureLoaderStyles();
-    let ov = document.getElementById("ulydia_overlay_loader_simple");
-    if (!ov){
-      ov = document.createElement("div");
-      ov.id = "ulydia_overlay_loader_simple";
-      ov.innerHTML = `
-        <div class="ul-loader-card">
-          <div class="ul-loader-spin" aria-hidden="true"></div>
-          <div class="ul-loader-title" id="ulydia_loader_title">${escapeHtml(message || "Chargement…")}</div>
-          <div class="ul-loader-sub">Merci de patienter un instant.</div>
-        </div>
-      `;
-      document.body.appendChild(ov);
-    }
-    const t = document.getElementById("ulydia_loader_title");
-    if (t) t.textContent = message || "Chargement…";
-  }
-  function hideLoaderOverlay(){
-    const ov = document.getElementById("ulydia_overlay_loader_simple");
-    if (ov) ov.remove();
-  }
-
-function qp() { return new URL(location.href).searchParams; }
+  function qp() { return new URL(location.href).searchParams; }
   function getISO() {
     const p = qp();
     const iso = String(p.get("country") || p.get("iso") || "").trim().toUpperCase();
@@ -1700,14 +1663,7 @@ function setLinks(linkUrl){
       });
     }
 
-const fb0 = await resolveCountryBanners(iso, payload);
-    // Debug helper: ?swap_fallback=1 swaps wide/square fallback banners to quickly verify mapping
-    const swapFallback = /^(1|true|yes)$/i.test(String(p.get("swap_fallback") || ""));
-    const fb = {
-      ...fb0,
-      wide: swapFallback ? fb0.square : fb0.wide,
-      square: swapFallback ? fb0.wide : fb0.square,
-    };
+const fb = await resolveCountryBanners(iso, payload);
     const fallbackLink = `/sponsor?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
 
     // 1) Preview
@@ -2325,17 +2281,13 @@ function blocMatches(bloc, slug, iso) {
     const slug = getSlug();
     console.log("[metier-page] v12.9 boot", { iso, slug });
 
-    showLoaderOverlay("Chargement de la fiche métier…");
-
-
     try { renderShell(root); }
-    catch (e) { hideLoaderOverlay(); overlayError("Render shell failed", e); return; }
+    catch (e) { overlayError("Render shell failed", e); return; }
 
     // MUST happen immediately after shell render (prevents placeholders)
     killTemplatePlaceholdersNow();
 
     const payload = await fetchMetierPayload({ iso, slug });
-    if (!payload) { hideLoaderOverlay(); overlayError("Worker payload is empty", new Error("No payload")); return; }
 
     const lang = String(payload?.lang || payload?.pays?.langue_finale || payload?.pays?.lang || "").trim().toLowerCase();
 
@@ -2420,10 +2372,36 @@ function blocMatches(bloc, slug, iso) {
 
     const faqFiltered = Array.isArray(faqList) ? faqList.filter(faqMatches) : [];
     renderFAQ(faqFiltered);
-
-    hideLoaderOverlay();
   }
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => { try{ hideLoaderOverlay(); }catch(_){}; overlayError("Boot failed", e); }));
-  else boot().catch(e => { try{ hideLoaderOverlay(); }catch(_){}; overlayError("Boot failed", e); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
+  else boot().catch(e => overlayError("Boot failed", e));
 })();
+<script>
+  // Fonction pour inverser les formats des bannières
+  function invertBannerFormats() {
+    const wideBanners = document.querySelectorAll('.sponsor-banner-wide');
+    const squareBanners = document.querySelectorAll('.sponsor-banner-square');
+
+    wideBanners.forEach(banner => {
+      const clone = banner.cloneNode(true);
+      clone.classList.remove('sponsor-banner-wide');
+      clone.classList.add('sponsor-banner-square-inverted');
+      clone.style.width = '300px';
+      clone.style.height = '300px';
+      banner.parentNode.appendChild(clone);
+    });
+
+    squareBanners.forEach(banner => {
+      const clone = banner.cloneNode(true);
+      clone.classList.remove('sponsor-banner-square');
+      clone.classList.add('sponsor-banner-wide-inverted');
+      clone.style.width = '100%';
+      clone.style.height = '200px';
+      banner.parentNode.appendChild(clone);
+    });
+  }
+
+  // Appel de la fonction après le chargement de la page
+  window.addEventListener('DOMContentLoaded', invertBannerFormats);
+</script>
