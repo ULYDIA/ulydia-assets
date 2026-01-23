@@ -189,7 +189,7 @@ try {
     const st = document.createElement("style");
     st.id = "ulydia_overlay_styles";
     st.textContent = `
-      .u-overlay{position:fixed;inset:0;z-index:999999;background:rgba(248,250,252,.82);backdrop-filter:saturate(180%) blur(6px);display:flex;align-items:flex-start;justify-content:center;padding-top:64px}
+      .u-overlay{position:fixed;inset:0;z-index:999999;background:rgba(248,250,252,.82);backdrop-filter:saturate(180%) blur(6px);display:flex;align-items:center;justify-content:center;padding:24px}
       .u-overlayCard{width:min(640px, calc(100vw - 24px));background:#fff;border:1px solid rgba(148,163,184,.45);box-shadow:0 10px 30px rgba(15,23,42,.10);border-radius:18px;padding:18px}
       .u-overlayRow{display:flex;gap:14px;align-items:center}
       .u-spinner{width:20px;height:20px;border-radius:999px;border:2px solid rgba(99,102,241,.25);border-top-color:rgba(99,102,241,1);animation:spin 1s linear infinite}
@@ -1436,38 +1436,66 @@ function renderPlaceholder(root) {
     if (!wideA) return;
     wideA.classList.add("ul-has-banner-img");
     wideA.style.backgroundImage = "none";
-    if (!wideUrl) {
-      wideA.innerHTML = "";
-      return;
-    }
-    const safe = wideUrl.replace(/"/g, "&quot;");
+
+    // ✅ sizing to avoid deformation (matches your last good version)
+    wideA.style.width = "100%";
+    wideA.style.maxWidth = "680px";
+    wideA.style.aspectRatio = "680 / 120";
+    wideA.style.height = "auto";
+    wideA.style.borderRadius = "16px";
+    wideA.style.overflow = "hidden";
+    wideA.style.border = "2px solid var(--border)";
+    wideA.style.background = "#fff";
+    wideA.style.margin = "12px auto 0";
+
+    const displayUrl = wideUrl || fallbackUrl || "";
+    if (!displayUrl) { wideA.innerHTML = ""; return; }
+
+    const safe = String(displayUrl).replace(/"/g, "&quot;");
     wideA.innerHTML = `
       <img alt="" src="${safe}"
-           style="width:100%;height:100%;object-fit:cover;display:block" />
+           style="width:100%;height:100%;object-fit:contain;display:block;background:#fff" />
     `;
     const img = wideA.querySelector("img");
-    if (img && fallbackUrl) {
+    // if sponsor url fails, try fallback; if fallback fails, remove content
+    if (img) {
+      const fb = fallbackUrl && fallbackUrl !== displayUrl ? fallbackUrl : "";
       img.onerror = () => {
-        // avoid broken-image frame
+        if (fb && img.src !== fb) { img.src = fb; return; }
         img.onerror = null;
-        img.src = fallbackUrl;
+        wideA.innerHTML = "";
       };
     }
   }
   function replaceSquareWithImg(logoBox, squareUrl, fallbackUrl) {
     if (!logoBox) return;
     logoBox.style.backgroundImage = "none";
-    if (!squareUrl) { logoBox.innerHTML = ""; return; }
-    const safe = squareUrl.replace(/"/g, "&quot;");
+
+    // ✅ sizing (300x300 target, responsive-safe)
+    logoBox.style.width = "100%";
+    logoBox.style.maxWidth = "300px";
+    logoBox.style.aspectRatio = "1 / 1";
+    logoBox.style.height = "auto";
+    logoBox.style.margin = "0 auto";
+    logoBox.style.borderRadius = "16px";
+    logoBox.style.overflow = "hidden";
+    logoBox.style.background = "#fff";
+
+    const displayUrl = squareUrl || fallbackUrl || "";
+    if (!displayUrl) { logoBox.innerHTML = ""; return; }
+
+    const safe = String(displayUrl).replace(/"/g, "&quot;");
     logoBox.innerHTML = `
       <img alt="" src="${safe}"
-           style="width:100%;height:100%;object-fit:cover;border-radius:16px;display:block" />
+           style="width:100%;height:100%;object-fit:contain;border-radius:16px;display:block;background:#fff" />
     `;
     const img = logoBox.querySelector("img");
-    if (img && fallbackUrl) {
+    if (img) {
+      const fb = fallbackUrl && fallbackUrl !== displayUrl ? fallbackUrl : "";
       img.onerror = () => {
+        if (fb && img.src !== fb) { img.src = fb; return; }
         img.onerror = null;
-        img.src = fallbackUrl;
+        logoBox.innerHTML = "";
       };
     }
   }
@@ -1586,7 +1614,14 @@ async function resolveCountryBanners(iso, payload) {
       anchor.rel = "noopener";
       anchor.style.display = "block";
       anchor.style.width = "100%";
-      anchor.style.marginTop = "12px";
+      anchor.style.maxWidth = "680px";
+      anchor.style.aspectRatio = "680 / 120";
+      anchor.style.height = "auto";
+      anchor.style.borderRadius = "16px";
+      anchor.style.overflow = "hidden";
+      anchor.style.border = "2px solid var(--border)";
+      anchor.style.background = "#fff";
+      anchor.style.margin = "12px auto 0";
       // insert after H1 if possible
       const h1 = document.getElementById("nom-metier")?.closest("h1") || document.getElementById("nom-metier");
       if (h1 && h1.parentNode) h1.parentNode.insertBefore(anchor, h1.nextSibling);
@@ -1607,6 +1642,10 @@ async function resolveCountryBanners(iso, payload) {
       const box = document.createElement("div");
       box.className = "sponsor-logo-square";
       box.style.width = "100%";
+      box.style.maxWidth = "300px";
+      box.style.aspectRatio = "1 / 1";
+      box.style.height = "auto";
+      box.style.margin = "0 auto";
       box.style.borderRadius = "16px";
       box.style.overflow = "hidden";
       box.style.border = "2px solid var(--border)";
@@ -2314,6 +2353,34 @@ function blocMatches(bloc, slug, iso) {
       if (!Array.isArray(list)) return [];
       const S = String(slug||"").trim().toLowerCase();
       const I = String(iso||"").trim().toUpperCase();
+
+      function extractSlug(b){
+        const candidates = [
+          b.job_slug, b.metier_slug, b["metier_slug"], b["Job slug"],
+          b.metier, b["Métier"], b.job, b.slug, b["Slug métier"], b["Slug metier"]
+        ];
+        for (const c of candidates){
+          if (!c) continue;
+          if (typeof c === "string" && c.trim()) return c.trim().toLowerCase();
+          if (Array.isArray(c)){
+            // try array of strings or objects with slug
+            for (const x of c){
+              if (!x) continue;
+              if (typeof x === "string" && x.trim()) return x.trim().toLowerCase();
+              if (typeof x === "object"){
+                const s = x.slug || x.metier_slug || x.job_slug;
+                if (typeof s === "string" && s.trim()) return s.trim().toLowerCase();
+              }
+            }
+          }
+          if (typeof c === "object"){
+            const s = c.slug || c.metier_slug || c.job_slug;
+            if (typeof s === "string" && s.trim()) return s.trim().toLowerCase();
+          }
+        }
+        return "";
+      }
+
       return list.filter(it=>{
         const b = it?.fieldData || it?.fields || it || {};
         const q = String(b.question || b.q || b["Question"] || "").trim();
@@ -2324,12 +2391,13 @@ function blocMatches(bloc, slug, iso) {
           b.country_code || b.code_iso || b.iso || b.ISO || b["Code ISO"] || ""
         ).trim().toUpperCase();
 
-        const slugCand = String(
-          b.job_slug || b.metier_slug || b["metier_slug"] || b["Job slug"] || b["Métier"] || b.metier || b.job || b.slug || ""
-        ).trim().toLowerCase();
+        const slugCand = extractSlug(b);
+
+        // ✅ strict: if we can't tie the FAQ to a metier slug, we DO NOT show it
+        if (!slugCand) return false;
 
         const okIso = !isoCand || isoCand === I;
-        const okSlug = !slugCand || slugCand === S || slugCand.includes(S);
+        const okSlug = (slugCand === S) || slugCand.includes(S) || S.includes(slugCand);
         return okIso && okSlug;
       });
     }
