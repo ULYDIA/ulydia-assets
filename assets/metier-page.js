@@ -1331,17 +1331,9 @@ try {
     const nb = document.getElementById("sponsor-name-banner");
     const ns = document.getElementById("sponsor-name-sidebar");
     if (nb) nb.textContent = "";
-    if (ns) ns.textContent = "";    // FAQ: hide + clear
-    const faqCard = cardByTitleId("faq-title");
-    if (faqCard) {
-      faqCard.style.display = "none";
-      // clear common containers
-      const wrap = faqCard.querySelector(".space-y-3") || faqCard.querySelector("[data-ul-faqs]");
-      if (wrap) wrap.innerHTML = "";
-      // also remove any hardcoded FAQ items that could be present in the template
-      faqCard.querySelectorAll(".faq-item").forEach(n => n.remove());
-    }
-    // Metier_Pays_Bloc rich sections in template: hide + clear
+    if (ns) ns.textContent = "";
+    // FAQ: keep template visible by default (renderFAQ will replace only when payload provides relevant items)
+// Metier_Pays_Bloc rich sections in template: hide + clear
     ["acces-title","marche-title","salaire-title","formation-title"].forEach(id => {
       const c = cardByTitleId(id);
       if (c) {
@@ -1428,9 +1420,35 @@ async function resolveCountryBanners(iso, payload) {
     payload?.banner_square, payload?.banniere_square
   );
   const fromPayloadCTA = String(pB?.cta || pPays?.cta || "").trim();
+async function measure(url){
+  return await new Promise((resolve) => {
+    if (!url) return resolve(null);
+    const img = new Image();
+    let done = false;
+    const t = setTimeout(() => { if (!done){ done=true; resolve(null); } }, 2000);
+    img.onload = () => { if (done) return; done=true; clearTimeout(t); resolve({w: img.naturalWidth||0, h: img.naturalHeight||0}); };
+    img.onerror = () => { if (done) return; done=true; clearTimeout(t); resolve(null); };
+    img.src = url;
+  });
+}
+async function maybeSwapByAspect(wideUrl, squareUrl){
+  if (!wideUrl || !squareUrl) return {wideUrl, squareUrl};
+  const [a,b] = await Promise.all([measure(wideUrl), measure(squareUrl)]);
+  if (!a || !b) return {wideUrl, squareUrl};
+  const arWide = a.w && a.h ? (a.w / a.h) : 0;
+  const arSq   = b.w && b.h ? (b.w / b.h) : 0;
+  // Heuristic: wide banner should be clearly landscape (>1.4), square should be closer to 1 (<=1.4)
+  const wideLooksNotWide = arWide > 0 && arWide < 1.25;     // portrait-ish or square-ish
+  const squareLooksWide  = arSq   > 1.6;                    // strong landscape
+  if (wideLooksNotWide && squareLooksWide) {
+    return { wideUrl: squareUrl, squareUrl: wideUrl };
+  }
+  return {wideUrl, squareUrl};
+}
 
   if (fromPayloadWide || fromPayloadSquare) {
-    return { wide: fromPayloadWide, square: fromPayloadSquare, cta: fromPayloadCTA };
+    const swapped = await maybeSwapByAspect(fromPayloadWide, fromPayloadSquare);
+    return { wide: swapped.wideUrl || fromPayloadWide, square: swapped.squareUrl || fromPayloadSquare, cta: fromPayloadCTA };
   }
 
   // 2) Fallback to catalog.json countries map (legacy)
@@ -1647,6 +1665,7 @@ if (hasSponsor) {
   }
   function renderFAQ(list) {
     let faqCard = cardByTitleId("faq-title");
+    let created = false;
 
     // If template doesn't include a FAQ card, create one (full-code mode)
     if (!faqCard) {
@@ -1668,9 +1687,12 @@ if (hasSponsor) {
       `;
       host.appendChild(wrap);
       faqCard = wrap;
+      created = true;
     }
 
     if (!Array.isArray(list) || list.length === 0) {
+      // If we didn't create a new card, keep any template FAQs intact
+      if (!created) { faqCard.style.display = ""; return; }
       faqCard.style.display = "none";
       return;
     }
