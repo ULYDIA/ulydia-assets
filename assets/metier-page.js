@@ -1,3 +1,30 @@
+// =========================================================
+// Catalog helpers (countries -> langue_finale + non-sponsor banners)
+// =========================================================
+const __CATALOG_CACHE__ = { ts: 0, data: null };
+async function getCatalog(){
+  const now = Date.now();
+  if (__CATALOG_CACHE__.data && (now - __CATALOG_CACHE__.ts) < 10 * 60 * 1000) return __CATALOG_CACHE__.data;
+  const data = await fetchJSON(CATALOG_URL);
+  __CATALOG_CACHE__.data = data;
+  __CATALOG_CACHE__.ts = now;
+  return data;
+}
+async function getCountryMeta(iso){
+  const cc = String(iso || "").trim().toUpperCase();
+  if (!cc) return null;
+  try{
+    const catalog = await getCatalog();
+    const arr = Array.isArray(catalog?.countries) ? catalog.countries : [];
+    return arr.find(c => String(c?.iso || "").toUpperCase() === cc) || null;
+  } catch(e){
+    return null;
+  }
+}
+function normalizeLang(l){
+  const s = String(l || "").trim().toLowerCase();
+  return (s === "en" || s === "fr" || s === "de" || s === "es" || s === "it") ? s : "";
+}
 /* metier-page.v12.9.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
@@ -124,84 +151,17 @@ try {
 
 
   function qp() { return new URL(location.href).searchParams; }
-
-  // ---------------------------------------------------------
-  // URL params
-  // - country / iso : ISO2 country (FR, GB, ES...)
-  // - lang          : language override (fr, en, es...)
-  // Backward compat:
-  // - if country looks like a language code (EN/FR/ES/...) and iso is missing,
-  //   treat it as lang override and resolve ISO via visitor / default.
-  // ---------------------------------------------------------
-  const KNOWN_LANGS = new Set(["en","fr","es","it","de","pt","nl","pl","sv","no","da","fi","cs","sk","hu","ro","bg","el","tr","ar","he","ru","uk","zh","ja","ko"]);
-
+  function getISO() {
+    const p = qp();
+    const iso = String(p.get("country") || p.get("iso") || "").trim().toUpperCase();
+    return iso || "FR";
+  }
   function getSlug() {
     const p = qp();
     return String(p.get("metier") || p.get("slug") || "").trim();
   }
 
-  function getLangOverride() {
-    const p = qp();
-    const raw = String(p.get("lang") || p.get("language") || "").trim();
-    if (raw) return raw.toLowerCase();
-
-    // Back-compat: country=EN used mistakenly as language
-    const c = String(p.get("country") || "").trim().toLowerCase();
-    const isoParam = String(p.get("iso") || "").trim();
-    if (!isoParam && c && c.length === 2 && KNOWN_LANGS.has(c)) return c;
-
-    return "";
-  }
-
-  function getISOFromParams() {
-    // ✅ Canonical: use ?country=XX (like the Webflow template)
-    // Backward-compat: still accept ?iso=XX
-    const qp = new URLSearchParams(location.search);
-
-    const fromCountry = String(qp.get("country") || "").trim().toUpperCase();
-    if (fromCountry && /^[A-Z]{2}$/.test(fromCountry)) return fromCountry;
-
-    const fromIso = String(qp.get("iso") || "").trim().toUpperCase();
-    if (fromIso && /^[A-Z]{2}$/.test(fromIso)) return fromIso;
-
-    // If someone mistakenly put a language into ?country (ex: country=en),
-    // do NOT treat it as ISO.
-    return "";
-  }
-
-  async function detectVisitorISO() {
-    // 1) cached
-    try {
-      const cached = String(localStorage.getItem("ulydia_iso") || "").trim().toUpperCase();
-      if (cached && cached.length === 2) return cached;
-    } catch(_) {}
-
-    // 2) ipinfo (if token provided)
-    const token = String(window.ULYDIA_IPINFO_TOKEN || "").trim();
-    if (token) {
-      try {
-        const r = await fetch(`https://ipinfo.io/json?token=${encodeURIComponent(token)}`, { cache: "no-store" });
-        if (r.ok) {
-          const j = await r.json();
-          const iso = String(j?.country || "").trim().toUpperCase();
-          if (iso && iso.length === 2) {
-            try { localStorage.setItem("ulydia_iso", iso); } catch(_) {}
-            return iso;
-          }
-        }
-      } catch(_) {}
-    }
-
-    // 3) default
-    return "FR";
-  }
-
-  async function resolveISO() {
-    const iso = getISOFromParams();
-    if (iso) return iso;
-    return await detectVisitorISO();
-  }
-function pickFirst(...vals) {
+  function pickFirst(...vals) {
     for (const v of vals) {
       if (v === undefined || v === null) continue;
       if (typeof v === "string" && v.trim() === "") continue;
@@ -274,33 +234,17 @@ function pickFirst(...vals) {
     let root = document.getElementById("ulydia-metier-root");
     if (root) return root;
 
-    // Create it (but insert at the RIGHT place: after Webflow header / inside main)
+    // If missing, create it but DO NOT prepend (would push Webflow header to the bottom)
     root = document.createElement("div");
     root.id = "ulydia-metier-root";
 
-    const headerEl =
-      document.querySelector("[data-ulydia-header]") ||
-      document.querySelector(".w-nav") ||
-      document.querySelector("header");
-
-    const mainEl =
+    const host =
       document.querySelector("[data-ulydia-metier-host]") ||
       document.querySelector("main") ||
-      document.querySelector("[role='main']") ||
-      document.querySelector(".w-dyn-list, .w-dyn-items");
+      document.querySelector(".w-dyn-list, .w-dyn-items") ||
+      document.body;
 
-    if (mainEl) {
-      mainEl.appendChild(root);
-      return root;
-    }
-
-    if (headerEl && headerEl.parentNode) {
-      headerEl.parentNode.insertBefore(root, headerEl.nextSibling);
-      return root;
-    }
-
-    // Fallback: append to body (should be rare)
-    (document.body || document.documentElement).appendChild(root);
+    host.appendChild(root);
     return root;
   }
   function renderPlaceholder(root) {
@@ -1487,16 +1431,11 @@ function pickFirst(...vals) {
   }
 
   // ---------- Worker ----------
-  async function fetchMetierPayload({ iso, slug, lang }) {
+  async function fetchMetierPayload({ iso, slug }) {
     if (!slug) return null;
     const url = new URL(`${WORKER_URL}/v1/metier-page`);
     url.searchParams.set("iso", iso);
     url.searchParams.set("slug", slug);
-    if (lang) {
-      const L = String(lang).trim().toLowerCase();
-      url.searchParams.set("lang", L);
-      url.searchParams.set("language", L);
-    }
     url.searchParams.set("proxy_secret", PROXY_SECRET);
     return fetchJSON(url.toString()).catch((e) => {
       console.warn("[metier.v12.4] worker payload failed", e);
@@ -1567,27 +1506,10 @@ function pickFirst(...vals) {
   }
 
   
-async function resolveCountryBanners(iso, payload, langOverride) {
+async function resolveCountryBanners(payload, iso) {
   // 1) Prefer banners coming from the Worker payload (single source of truth)
   const pPays = payload?.pays || payload?.country || payload?.paysData || null;
   const pB = pPays?.banners || pPays?.banner || payload?.banners || null;
-
-
-  const lang = String(
-    langOverride || payload?.lang || pPays?.langue_finale || pPays?.lang || ""
-  ).trim().toLowerCase();
-
-  // If banners are grouped by language (e.g. banners.en / banners.fr), pick the right one
-  let pB2 = pB;
-  try{
-    if (pB2 && typeof pB2 === "object" && !Array.isArray(pB2) && lang && pB2[lang] && typeof pB2[lang] === "object") {
-      pB2 = pB2[lang];
-    }
-    if (!pB2 && pPays && typeof pPays === "object") {
-      const byLang = pPays?.banners_by_lang || pPays?.bannersByLang || pPays?.banners_lang || null;
-      if (byLang && typeof byLang === "object" && lang && byLang[lang]) pB2 = byLang[lang];
-    }
-  } catch(_){}
 
   const pick = (...vals) => pickUrl(pickFirst(...vals));
 
@@ -1595,33 +1517,33 @@ async function resolveCountryBanners(iso, payload, langOverride) {
   // Build candidate lists (Webflow field naming is sometimes inconsistent, so we choose by aspect ratio)
   const wideCandidates = [
     pick(
-      pB2?.wide, pB2?.banner_wide, pB2?.image_wide, pB2?.imageWide,
+      pB?.wide, pB?.banner_wide, pB?.image_wide, pB?.imageWide,
       pPays?.banner_wide, pPays?.banniere_wide, pPays?.banniere_2, pPays?.image_2,
       payload?.banner_wide, payload?.banniere_wide
     ),
     // sometimes stored in logo_1
     pick(
-      pB2?.logo_2, pB2?.image_2, pPays?.image_2,
-      pB2?.logo_1, pB2?.image_1, pPays?.image_1,
+      pB?.logo_2, pB?.image_2, pPays?.image_2,
+      pB?.logo_1, pB?.image_1, pPays?.image_1,
       pPays?.banniere_1, pPays?.banniere_2
     )
   ].filter(Boolean);
 
   const squareCandidates = [
     pick(
-      pB2?.square, pB2?.banner_square, pB2?.image_square, pB2?.imageSquare,
+      pB?.square, pB?.banner_square, pB?.image_square, pB?.imageSquare,
       pPays?.banner_square, pPays?.banniere_square, pPays?.banniere_1, pPays?.image_1,
       payload?.banner_square, payload?.banniere_square
     ),
     // sometimes stored in logo_2
     pick(
-      pB2?.logo_1, pB2?.image_1, pPays?.image_1,
-      pB2?.logo_2, pB2?.image_2, pPays?.image_2,
+      pB?.logo_1, pB?.image_1, pPays?.image_1,
+      pB?.logo_2, pB?.image_2, pPays?.image_2,
       pPays?.banniere_1, pPays?.banniere_2
     )
   ].filter(Boolean);
 
-  const fromPayloadCTA = String(pB2?.cta || pPays?.cta || "").trim();
+  const fromPayloadCTA = String(pB?.cta || pPays?.cta || "").trim();
 
   async function measure(url){
     return await new Promise((resolve) => {
@@ -1713,13 +1635,71 @@ async function resolveCountryBanners(iso, payload, langOverride) {
     });
   };
   const [r1,r2] = await Promise.all([ratio(u1), ratio(u2)]);
-  const wide = (r1 >= r2) ? u1 : u2;   // prefer the more "wide" ratio
-  const square = (r1 >= r2) ? u2 : u1;
+  const wide = (r1 >= r2) ? u2 : u1;   // prefer the more "wide" ratio
+  const square = (r1 >= r2) ? u1 : u2;
   const cta = String(c?.banners?.cta || c?.cta || "").trim();
   return { wide, square, cta };
 }
 
-  async function applySponsor({ iso, slug, payload, lang }) {
+  function tUnavailable(lang){
+  const L = normalizeLang(lang) || "en";
+  const map = {
+    fr: "Désolé, cette fiche n'est pas pour le moment disponible pour ce pays.",
+    en: "Sorry, this job profile is not available yet for this country.",
+    de: "Leider ist dieses Berufsprofil für dieses Land derzeit nicht verfügbar.",
+    es: "Lo sentimos, esta ficha no está disponible todavía para este país.",
+    it: "Spiacenti, questa scheda non è ancora disponibile per questo paese."
+  };
+  return map[L] || map.en;
+}
+
+function renderUnavailable(root, lang){
+  try{
+    const subtitleEl = root.querySelector('[data-ul="metier-subtitle"]') || root.querySelector('.ul-subtitle') || document.getElementById("metier-subtitle");
+    if (subtitleEl) subtitleEl.textContent = tUnavailable(lang);
+
+    root.querySelectorAll('[data-ul-section="content"], .ul-section-content, .ul-metier-sections').forEach(el => {
+      try{ el.style.display = "none"; }catch(_){}
+    });
+
+    let box = root.querySelector("#ul-unavailable");
+    if (!box){
+      box = document.createElement("div");
+      box.id = "ul-unavailable";
+      box.style.maxWidth = "920px";
+      box.style.margin = "24px auto 0";
+      box.style.padding = "18px 18px";
+      box.style.border = "1px solid rgba(0,0,0,.08)";
+      box.style.borderRadius = "14px";
+      box.style.background = "#fff";
+      box.style.fontSize = "15px";
+      box.style.lineHeight = "1.5";
+      box.style.color = "#24324a";
+      const anchorNode = root.querySelector(".ul-metier-hero") || root.firstElementChild || root;
+      anchorNode.parentNode.insertBefore(box, anchorNode.nextSibling);
+    }
+    box.textContent = tUnavailable(lang);
+  } catch(e){}
+}
+
+function applyNonSponsorBanners(root, banners){
+  try{
+    const meta = banners || {};
+    const wideA = root.querySelector('.ul-banner-wide') || root.querySelector('[data-ul-banner="wide"]');
+    const squareA = root.querySelector('.ul-banner-square') || root.querySelector('[data-ul-banner="square"]');
+
+    const wideUrl = pickUrl(meta.wide || meta.bannerWide || "");
+    const squareUrl = pickUrl(meta.square || meta.bannerSquare || "");
+    const ctaUrl = String(meta.cta || meta.link || "/sponsor").trim();
+
+    setAnchorImage(wideA, wideUrl);
+    setAnchorImage(squareA, squareUrl);
+    setAnchorHref(wideA, ctaUrl);
+    setAnchorHref(squareA, ctaUrl);
+  } catch(e){}
+}
+
+async function applySponsor({ iso, slug, payload }) {
     const p = qp();
     const isPreview = String(p.get("preview") || "") === "1";
 
@@ -1806,11 +1786,7 @@ function setLinks(linkUrl){
       });
     }
 
-const countryMeta = resolveCountryFromCatalog(payload, iso);
-    const countryMeta = resolveCountryFromCatalog(payload, iso);
-    const bannerLang = String(countryMeta?.langue_finale || countryMeta?.lang || lang || "en").toLowerCase();
-
-    const fb = await resolveCountryBanners(iso, payload, bannerLang);
+const fb = await resolveCountryBanners(payload, iso);
     const fallbackLink = `/sponsor?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
 
     // 1) Preview
@@ -1831,11 +1807,6 @@ const countryMeta = resolveCountryFromCatalog(payload, iso);
     // 2) Webflow metier fields (ROBUST mapping: supports Webflow slugged keys)
     const m = payload?.metier || payload?.job || payload?.item || payload || {};
     const f = m?.fieldData || m?.fields || m || {};
-    const hasMetier = !!(String(m?.slug || f?.slug || "").trim() || String(f?.name || f?.nom || "").trim());
-    if (!hasMetier) {
-      showNotAvailable(bannerLang);
-      return;
-    }
 
     function pickFirst(obj, keys){
       for (const k of keys){
@@ -2135,48 +2106,6 @@ function blocMatches(bloc, slug, iso) {
   }
 
   // ---------- Boot ----------
-
-  // =========================================================
-  // Not available message (when we don't have the metier in the country's final language yet)
-  // =========================================================
-  function showNotAvailable(lang) {
-    const L = String(lang || "en").toLowerCase();
-    const messages = {
-      en: "Sorry — this job profile is not available for this country yet.",
-      fr: "Désolé — cette fiche n'est pas encore disponible pour ce pays.",
-      de: "Entschuldigung – dieses Berufsprofil ist für dieses Land derzeit noch nicht verfügbar.",
-      es: "Lo sentimos: esta ficha aún no está disponible para este país.",
-      it: "Spiacenti: questa scheda non è ancora disponibile per questo Paese."
-    };
-    const msg = messages[L] || messages.en;
-
-    // Hide content sections if present
-    try { const s = document.getElementById("sections-root"); if (s) s.style.display = "none"; } catch(e){}
-    try { const side = document.getElementById("side-card"); if (side) side.style.display = "none"; } catch(e){}
-    try { const heroImg = document.getElementById("hero-image"); if (heroImg) heroImg.style.display = "none"; } catch(e){}
-
-    // Inject a notice card under the hero text
-    const anchor = document.getElementById("accroche-metier") || document.getElementById("nom-metier") || ROOT;
-    if (!anchor) return;
-
-    let box = document.getElementById("ul-not-available");
-    if (!box) {
-      box = document.createElement("div");
-      box.id = "ul-not-available";
-      box.style.marginTop = "14px";
-      box.style.padding = "14px 16px";
-      box.style.border = "1px solid rgba(15,23,42,0.10)";
-      box.style.borderRadius = "14px";
-      box.style.background = "rgba(99,102,241,0.06)";
-      box.style.color = "#0f172a";
-      box.style.fontSize = "14px";
-      box.style.lineHeight = "1.45";
-      anchor.parentNode.insertBefore(box, anchor.nextSibling);
-    }
-    box.textContent = msg;
-  }
-
-
   async function boot() {
     const root = ensureRoot();
     // Keep page blank + show centered loader
@@ -2532,10 +2461,13 @@ function blocMatches(bloc, slug, iso) {
       .ul-has-banner-img > img { display:block !important; }
     `);
 
-    const iso = await resolveISO();
-    const langOverride = getLangOverride();
+    const iso = getISO();
     const slug = getSlug();
-    console.log("[metier-page] v12.9 boot", { iso, slug, langOverride });
+
+    const countryMeta = await getCountryMeta(iso);
+    const desiredLang = normalizeLang(countryMeta?.langue_finale || countryMeta?.lang || "");
+
+    console.log("[metier-page] v12.9 boot", { iso, slug });
 
     try { renderShell(root); }
     catch (e) { overlayError("Render shell failed", e); return; }
@@ -2543,12 +2475,12 @@ function blocMatches(bloc, slug, iso) {
     // MUST happen immediately after shell render (prevents placeholders)
     killTemplatePlaceholdersNow();
 
-    const payload = await fetchMetierPayload({ iso, slug, lang: langOverride });
+    const payload = await fetchMetierPayload({ iso, slug });
 
     const lang = String(payload?.lang || payload?.pays?.langue_finale || payload?.pays?.lang || "").trim().toLowerCase();
 
     // Sponsor
-    applySponsor({ iso, slug, payload, lang: langOverride }).catch(e => overlayError("Apply sponsor failed", e));
+    applySponsor({ iso, slug, payload }).catch(e => overlayError("Apply sponsor failed", e));
 
     // Standard metier content
     const m = payload?.metier || payload?.job || payload?.item || payload || null;
@@ -2633,21 +2565,6 @@ function blocMatches(bloc, slug, iso) {
     hideLoaderOverlay();
 }
 
-  function waitForHostThenBoot(){
-    let tries = 0;
-    (function tick(){
-      tries++;
-      // try to ensure root can be placed correctly (header/main present)
-      const hasMain = !!(document.querySelector("main") || document.querySelector("[role='main']") || document.querySelector(".w-dyn-list, .w-dyn-items") || document.querySelector("[data-ulydia-metier-host]"));
-      const hasHeader = !!(document.querySelector(".w-nav") || document.querySelector("header") || document.querySelector("[data-ulydia-header]"));
-      if (hasMain || hasHeader || tries > 80) { // ~4s max
-        boot().catch(e => overlayError("Boot failed", e));
-        return;
-      }
-      setTimeout(tick, 50);
-    })();
-  }
-
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", waitForHostThenBoot);
-  else waitForHostThenBoot();
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
+  else boot().catch(e => overlayError("Boot failed", e));
 })();
