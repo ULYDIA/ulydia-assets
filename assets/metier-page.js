@@ -1,3 +1,66 @@
+// =========================================================
+// Catalog helpers (countries -> langue_finale + non-sponsor banners)
+// =========================================================
+const __CATALOG_CACHE__ = { ts: 0, data: null };
+async function getCatalog(){
+  const now = Date.now();
+  if (__CATALOG_CACHE__.data && (now - __CATALOG_CACHE__.ts) < 10 * 60 * 1000) return __CATALOG_CACHE__.data;
+  const data = await fetchJSON(CATALOG_URL);
+  __CATALOG_CACHE__.data = data;
+  __CATALOG_CACHE__.ts = now;
+  return data;
+}
+async function getCountryMeta(iso){
+  const cc = String(iso || "").trim().toUpperCase();
+  if (!cc) return null;
+  try{
+    const catalog = await getCatalog();
+    const arr = Array.isArray(catalog?.countries) ? catalog.countries : [];
+    return arr.find(c => String(c?.iso || "").toUpperCase() === cc) || null;
+  } catch(e){
+    return null;
+  }
+}
+function normalizeLang(l){
+  const s = String(l || "").trim().toLowerCase();
+  return (s === "en" || s === "fr" || s === "de" || s === "es" || s === "it") ? s : "";
+}
+
+// Detect whether the payload contains content in a required language.
+// We keep it permissive because Worker/Webflow field naming can vary.
+function jobHasLang(payload, requiredLang){
+  const lang = normalizeLang(requiredLang);
+  if (!lang) return true;
+
+  const m = payload?.metier || payload?.job || payload?.data?.metier || null;
+  if (!m) return false;
+
+  const direct = normalizeLang(m.lang || m.langue || m.language || m.locale || "");
+  if (direct && direct === lang) return true;
+
+  // Known patterns: content_by_lang, translations, or suffix fields
+  const byLang = m.content_by_lang || m.contents || m.translations || m.i18n || null;
+  if (byLang && typeof byLang === "object") {
+    const v = byLang[lang] || byLang[lang.toUpperCase()] || byLang[lang.toLowerCase()] || "";
+    if (v && String(v).trim()) return true;
+  }
+
+  const suffixKeys = [
+    "title_", "name_", "nom_", "accroche_", "tagline_", "description_", "desc_",
+    "overview_", "presentation_", "html_", "content_", "texte_"
+  ];
+  for (const pref of suffixKeys){
+    const v = m[pref + lang];
+    if (v && String(v).replace(/<[^>]*>/g,"").trim()) return true;
+  }
+
+  // Some payloads include arrays of available languages
+  const available = m.available_languages || m.languages || m.langs || null;
+  if (Array.isArray(available) && available.map(x=>normalizeLang(x)).includes(lang)) return true;
+
+  return false;
+}
+
 /* metier-page.v12.9.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
@@ -122,6 +185,29 @@ try {
     if (ov) ov.remove();
   }
 
+  function showMessageOverlay(message, sub){
+    injectOverlayStylesOnce();
+    // reuse the same overlay id (replace content)
+    let ov = document.getElementById("ulydia_overlay_loader");
+    if (!ov){
+      // create minimal overlay (same as loader but without spinner by default)
+      ov = document.createElement("div");
+      ov.id = "ulydia_overlay_loader";
+      ov.className = "u-overlay";
+      document.body.appendChild(ov);
+    }
+    const msg = message || "Sorry, this job is not available in your country at the moment.";
+    const ssub = (sub === undefined) ? "" : String(sub || "");
+    ov.innerHTML = `
+      <div class="u-overlayCard" style="max-width:720px">
+        <div>
+          <div class="u-overlayTitle">${escapeHtml(msg)}</div>
+          ${ssub ? `<div class="u-overlaySub">${escapeHtml(ssub)}</div>` : ``}
+        </div>
+      </div>`;
+  }
+
+
 
   function qp() { return new URL(location.href).searchParams; }
   function getISO() {
@@ -205,6 +291,12 @@ try {
   function ensureRoot() {
     // Prefer the placeholder already present in Webflow
     let root = document.getElementById("ulydia-metier-root");
+
+    // ✅ Critical fix: if the root was mistakenly placed in <head>, move it to <body>
+    if (root && root.parentElement && root.parentElement.tagName === "HEAD") {
+      try { document.body.appendChild(root); } catch(_) {}
+    }
+
     if (root) return root;
 
     // If missing, create it but DO NOT prepend (would push Webflow header to the bottom)
@@ -1357,6 +1449,26 @@ try {
     else node.innerHTML = `<p>${formatInlineBold(s).replace(/\n+/g, "<br/>")}</p>`;
   }
 
+  // ---------------------------------------------------------
+  // Country-language availability message
+  // ---------------------------------------------------------
+  function showCountryNotAvailable(lang){
+    const msg = ({
+      en: "Sorry, this job profile is not yet available for this country.",
+      fr: "Désolé, cette fiche métier n’est pas encore disponible pour ce pays.",
+      de: "Dieses Berufsprofil ist für dieses Land noch nicht verfügbar.",
+      es: "Este perfil profesional aún no está disponible para este país.",
+      it: "Questo profilo professionale non è ancora disponibile per questo paese."
+    })[lang] || "Not available.";
+
+    // Hide all content cards except the first one (overview)
+    const ids = ["missions-title","competences-title","environnements-title","profil-title","evolutions-title","faq-title"];
+    ids.forEach(hideCard);
+
+    // Show message inside "Vue d'ensemble"
+    setRich("description-title", `<p>${escapeHtml(msg)}</p>`);
+  }
+
   // ---------- Hide pays-bloc UI by header text (no IDs in template) ----------
   const PAYS_HEADERS = [
     "Indicateurs clés",
@@ -1407,8 +1519,10 @@ try {
   async function fetchMetierPayload({ iso, slug }) {
     if (!slug) return null;
     const url = new URL(`${WORKER_URL}/v1/metier-page`);
-    url.searchParams.set("iso", iso);
+    url.searchParams.set("country", iso);
+    url.searchParams.set("iso", iso); // fallback for older worker versions
     url.searchParams.set("slug", slug);
+    url.searchParams.set("metier", slug); // fallback alias
     url.searchParams.set("proxy_secret", PROXY_SECRET);
     return fetchJSON(url.toString()).catch((e) => {
       console.warn("[metier.v12.4] worker payload failed", e);
@@ -1479,7 +1593,7 @@ try {
   }
 
   
-async function resolveCountryBanners(iso, payload) {
+async function resolveCountryBanners(payload, iso) {
   // 1) Prefer banners coming from the Worker payload (single source of truth)
   const pPays = payload?.pays || payload?.country || payload?.paysData || null;
   const pB = pPays?.banners || pPays?.banner || payload?.banners || null;
@@ -1608,13 +1722,71 @@ async function resolveCountryBanners(iso, payload) {
     });
   };
   const [r1,r2] = await Promise.all([ratio(u1), ratio(u2)]);
-  const wide = (r1 >= r2) ? u2 : u1;   // prefer the more "wide" ratio
-  const square = (r1 >= r2) ? u1 : u2;
+  const wide = (r1 >= r2) ? u1 : u2;   // pick the more "wide" ratio
+  const square = (r1 >= r2) ? u2 : u1;
   const cta = String(c?.banners?.cta || c?.cta || "").trim();
   return { wide, square, cta };
 }
 
-  async function applySponsor({ iso, slug, payload }) {
+  function tUnavailable(lang){
+  const L = normalizeLang(lang) || "en";
+  const map = {
+    fr: "Désolé, cette fiche n'est pas pour le moment disponible pour ce pays.",
+    en: "Sorry, this job profile is not available yet for this country.",
+    de: "Leider ist dieses Berufsprofil für dieses Land derzeit nicht verfügbar.",
+    es: "Lo sentimos, esta ficha no está disponible todavía para este país.",
+    it: "Spiacenti, questa scheda non è ancora disponibile per questo paese."
+  };
+  return map[L] || map.en;
+}
+
+function renderUnavailable(root, lang){
+  try{
+    const subtitleEl = root.querySelector('[data-ul="metier-subtitle"]') || root.querySelector('.ul-subtitle') || document.getElementById("metier-subtitle");
+    if (subtitleEl) subtitleEl.textContent = tUnavailable(lang);
+
+    root.querySelectorAll('[data-ul-section="content"], .ul-section-content, .ul-metier-sections').forEach(el => {
+      try{ el.style.display = "none"; }catch(_){}
+    });
+
+    let box = root.querySelector("#ul-unavailable");
+    if (!box){
+      box = document.createElement("div");
+      box.id = "ul-unavailable";
+      box.style.maxWidth = "920px";
+      box.style.margin = "24px auto 0";
+      box.style.padding = "18px 18px";
+      box.style.border = "1px solid rgba(0,0,0,.08)";
+      box.style.borderRadius = "14px";
+      box.style.background = "#fff";
+      box.style.fontSize = "15px";
+      box.style.lineHeight = "1.5";
+      box.style.color = "#24324a";
+      const anchorNode = root.querySelector(".ul-metier-hero") || root.firstElementChild || root;
+      anchorNode.parentNode.insertBefore(box, anchorNode.nextSibling);
+    }
+    box.textContent = tUnavailable(lang);
+  } catch(e){}
+}
+
+function applyNonSponsorBanners(root, banners){
+  try{
+    const meta = banners || {};
+    const wideA = root.querySelector('.ul-banner-wide') || root.querySelector('[data-ul-banner="wide"]');
+    const squareA = root.querySelector('.ul-banner-square') || root.querySelector('[data-ul-banner="square"]');
+
+    const wideUrl = pickUrl(meta.wide || meta.bannerWide || "");
+    const squareUrl = pickUrl(meta.square || meta.bannerSquare || "");
+    const ctaUrl = String(meta.cta || meta.link || "/sponsor").trim();
+
+    setAnchorImage(wideA, wideUrl);
+    setAnchorImage(squareA, squareUrl);
+    setAnchorHref(wideA, ctaUrl);
+    setAnchorHref(squareA, ctaUrl);
+  } catch(e){}
+}
+
+async function applySponsor({ iso, slug, payload }) {
     const p = qp();
     const isPreview = String(p.get("preview") || "") === "1";
 
@@ -1701,7 +1873,7 @@ function setLinks(linkUrl){
       });
     }
 
-const fb = await resolveCountryBanners(iso, payload);
+const fb = await resolveCountryBanners(payload, iso);
     const fallbackLink = `/sponsor?country=${encodeURIComponent(iso)}&metier=${encodeURIComponent(slug || "")}`;
 
     // 1) Preview
@@ -1767,14 +1939,17 @@ if (hasSponsor) {
 
     showNonSponsorBanners();
 
-    const swapFallback = String(p.get("swap_fallback") || "") === "1";
+    const swapFallbackParam = String(p.get("swap_fallback") || "").trim();
+    // ✅ Default behavior: swap fallback mapping (your catalog has the images inverted)
+    //   - wide slot gets the "square" image
+    //   - square slot gets the "wide" image
+    // You can force "no swap" with ?swap_fallback=0
+    const swapFallback = (swapFallbackParam !== "0");
     const compareFallback = String(p.get("compare_fallback") || "") === "1";
 
-    let fw = fb.wide || "";
-    let fs = fb.square || "";
-    if (swapFallback) { const tmp = fw; fw = fs; fs = tmp; }
-
-    // Default fallback rendering
+    let fw = swapFallback ? (fb.square || "") : (fb.wide || "");
+    let fs = swapFallback ? (fb.wide || "") : (fb.square || "");
+// Default fallback rendering
     replaceWideBannerWithImg(wideA, fw, "");
     replaceSquareWithImg(logoBox, fs, "");
     setLinks(fallbackLink);
@@ -2378,6 +2553,10 @@ function blocMatches(bloc, slug, iso) {
 
     const iso = getISO();
     const slug = getSlug();
+
+    const countryMeta = await getCountryMeta(iso);
+    const desiredLang = normalizeLang(countryMeta?.langue_finale || countryMeta?.lang || "");
+
     console.log("[metier-page] v12.9 boot", { iso, slug });
 
     try { renderShell(root); }
@@ -2390,6 +2569,23 @@ function blocMatches(bloc, slug, iso) {
 
     const lang = String(payload?.lang || payload?.pays?.langue_finale || payload?.pays?.lang || "").trim().toLowerCase();
 
+    // ---------------------------------------------------------
+    // Country language gate (CMS may not have the job in that language)
+    // If the country requires a language not returned by the CMS/Worker, show a centered message.
+    // ---------------------------------------------------------
+    const requiredLang = desiredLang; // from catalog.json (langue_finale)
+    const hasJob = !!(payload && (payload.metier || payload.job || payload.item));
+    if (requiredLang) {
+      const gotLang = normalizeLang(lang);
+      // if worker did not return the job, or returned a different language than required
+      if (!hasJob || !jobHasLang(payload, requiredLang) || (gotLang && gotLang !== requiredLang)) {
+        hideLoaderOverlay();
+        showMessageOverlay("Sorry, this job is not available in your country at the moment.");
+        return;
+      }
+    }
+
+
     // Sponsor
     applySponsor({ iso, slug, payload }).catch(e => overlayError("Apply sponsor failed", e));
 
@@ -2397,60 +2593,36 @@ function blocMatches(bloc, slug, iso) {
     const m = payload?.metier || payload?.job || payload?.item || payload || null;
     const f = m ? (m.fieldData || m.fields || m) : {};
 
+    // ---------------------------------------------------------
+    // If the visitor country expects EN but content is not available in EN:
+    // show a clear message (in EN) instead of showing FR fallback content.
+    // ---------------------------------------------------------
+    try{
+      const wantsEN = desiredLang === "en";
+      const payloadLang = String(lang || "").trim().toLowerCase();
+
+      const hasEN =
+        !isEmptyRich(f.description_en || f.descriptionEn || f.html_en || f.htmlEn || f.content_en || f.contentEn) ||
+        !isEmptyRich(f.missions_en || f.missionsEn) ||
+        !isEmptyRich(f.competences_en || f.competencesEn || f["Compétences_en"] || f["Competences_en"]) ||
+        !isEmptyRich(f.environnements_en || f.environnementsEn) ||
+        !isEmptyRich(f.profil_recherche_en || f.profilRechercheEn) ||
+        !isEmptyRich(f.evolutions_possibles_en || f.evolutionsPossiblesEn);
+
+      if (wantsEN && payloadLang && payloadLang !== "en" && !hasEN) {
+        // Keep header title, but replace body with the not-available message
+        setText("nom-metier", f.Nom || f.nom || f.title || f.name || slug);
+        setText("accroche-metier", "");
+        showCountryNotAvailable("en");
+        hideLoaderOverlay();
+        return;
+      }
+    } catch(_) {}
+
+
     if (m) {
       setText("nom-metier", f.Nom || f.nom || f.title || f.name || slug);
       setText("accroche-metier", f.accroche || f.tagline || f.subtitle || f.summary || "");
-
-      // -------------------------------------------------------
-      // ✅ Country language availability (if only FR content exists)
-      // -------------------------------------------------------
-      try {
-        const desiredLang = String(payload?.pays?.langue_finale || payload?.pays?.lang || payload?.lang || "fr").trim().toLowerCase();
-        const contentLang = String(m?.lang || m?.locale || m?.language || payload?.metier?.lang || payload?.lang || "fr").trim().toLowerCase();
-
-        const msgByLang = {
-          en: "Sorry, this job profile is not available yet for this country.",
-          fr: "Désolé, cette fiche n'est pas encore disponible pour ce pays.",
-          es: "Lo sentimos, esta ficha aún no está disponible para este país.",
-          de: "Leider ist dieses Profil für dieses Land derzeit noch nicht verfügbar.",
-          it: "Spiacenti, questa scheda non è ancora disponibile per questo Paese."
-        };
-
-        const shouldWarn = desiredLang && desiredLang !== "fr" && contentLang === "fr";
-        if (shouldWarn) {
-          const main = ROOT.querySelector("main");
-          if (main) {
-            const grid = main.querySelector(".grid");
-            if (grid) grid.style.display = "none";
-
-            const card = document.createElement("div");
-            card.className = "card";
-            const msg = msgByLang[desiredLang] || msgByLang.en;
-            card.innerHTML = `
-              <div class="p-6">
-                <div class="flex items-start gap-3">
-                  <div class="w-10 h-10 rounded-2xl bg-[var(--ul-purple-50)] flex items-center justify-center">
-                    <span class="text-[var(--ul-purple-700)] font-bold">i</span>
-                  </div>
-                  <div>
-                    <div class="text-sm font-semibold text-[var(--ul-text)]">Information</div>
-                    <div class="text-base text-[var(--ul-muted)] mt-1">${escapeHTML(msg)}</div>
-                  </div>
-                </div>
-              </div>
-            `;
-            main.prepend(card);
-
-            // Also update the short description to the same message
-            setText("accroche-metier", msg);
-          }
-
-          // Stop here so we don't render FR-only sections.
-          // Banners (sponsor / non-sponsor) remain handled below.
-          return;
-        }
-      } catch (e) {}
-
 
       setRich("description-title", f.description || "");
       setRich("missions-title", f.missions || "");
