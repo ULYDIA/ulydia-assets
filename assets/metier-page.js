@@ -1,4 +1,4 @@
-/* metier-page.v12.6.js — Ulydia
+/* metier-page.v12.9.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
       - sponsor_logo_2 => wide (top)
@@ -13,9 +13,6 @@
    ✅ FAQ: no flicker (hard hidden + cleared, shown only with data)
 */
 (() => {
-  if (window.__ULYDIA_METIER_BOOT__) return;
-  window.__ULYDIA_METIER_BOOT__ = true;
-
   if (window.__ULYDIA_METIER_BOOT__) return;
   window.__ULYDIA_METIER_BOOT__ = true;
 
@@ -1422,7 +1419,6 @@ async function resolveCountryBanners(iso, payload) {
 
   const pick = (...vals) => pickUrl(pickFirst(...vals));
 
-    const pick = (...vals) => pickUrl(pickFirst(...vals));
 
   // Build candidate lists (Webflow field naming is sometimes inconsistent, so we choose by aspect ratio)
   const wideCandidates = [
@@ -2254,7 +2250,7 @@ function blocMatches(bloc, slug, iso) {
 
     const iso = getISO();
     const slug = getSlug();
-    console.log("[metier-page] v12.4 boot", { iso, slug });
+    console.log("[metier-page] v12.9 boot", { iso, slug });
 
     try { renderShell(root); }
     catch (e) { overlayError("Render shell failed", e); return; }
@@ -2346,7 +2342,6 @@ function blocMatches(bloc, slug, iso) {
     }
 
     const faqFiltered = Array.isArray(faqList) ? faqList.filter(faqMatches) : [];
-const faqFiltered = Array.isArray(faqList) ? faqList.filter(faqMatches) : [];
     renderFAQ(faqFiltered);
   }
 
