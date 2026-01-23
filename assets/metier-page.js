@@ -16,6 +16,9 @@
   if (window.__ULYDIA_METIER_BOOT__) return;
   window.__ULYDIA_METIER_BOOT__ = true;
 
+window.__METIER_PAGE_BUILD__ = "metier-page patched country v3.2 (catalog strict banner_1->wide banner_2->square + country-lang unavailable overlay)";
+try { console.log("[metier-page]", window.__METIER_PAGE_BUILD__); } catch(e){}
+
   const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const CATALOG_URL = `${ASSETS_BASE}/catalog.json`;
 
@@ -117,6 +120,30 @@ try {
     const t = document.getElementById("ulydia_overlay_title");
     if (t) t.textContent = message || "Loading…";
   }
+
+function showMessageOverlay(message, sub){
+  injectOverlayStylesOnce();
+  let ov = document.getElementById("ulydia_overlay_message");
+  if (!ov){
+    ov = document.createElement("div");
+    ov.id = "ulydia_overlay_message";
+    ov.className = "u-overlay";
+    ov.innerHTML = meaningfullyTrim(`
+      <div class="u-overlayCard">
+        <div>
+          <div class="u-overlayTitle" id="ulydia_message_title"></div>
+          <div class="u-overlaySub" id="ulydia_message_sub"></div>
+        </div>
+      </div>
+    `);
+    document.body.appendChild(ov);
+  }
+  const t = document.getElementById("ulydia_message_title");
+  const s = document.getElementById("ulydia_message_sub");
+  if (t) t.textContent = message || "";
+  if (s) s.textContent = sub || "";
+}
+
   function hideLoaderOverlay(){
     const ov = document.getElementById("ulydia_overlay_loader");
     if (ov) ov.remove();
@@ -1578,39 +1605,25 @@ async function resolveCountryBanners(iso, payload) {
   }
 
   // 2) Fallback to catalog.json countries map (legacy)
-  const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`).catch(() => null);
-  const countries = data?.countries || [];
-  const c = countries.find(x => String(x?.iso || x?.code || "").toUpperCase() === iso) || null;
-  if (!c) return { wide:"", square:"", cta:"" };
+// IMPORTANT mapping (confirmed specs):
+//  - banner_1 : 680x120  => WIDE (horizontal)
+//  - banner_2 : 300x300  => SQUARE
+const data = await fetchJSON(`${CATALOG_URL}?v=${Date.now()}`).catch(() => null);
+const countries = data?.countries || [];
+const c = countries.find(x => String(x?.iso || x?.code || "").toUpperCase() === iso) || null;
+if (!c) return { wide:"", square:"", cta:"" };
 
-  // Support multiple naming conventions
-  const u1 = pickUrl(
-    pickFirst(
-      c?.banners?.image_1, c?.banners?.square, c?.banners?.logo_1,
-      c?.banner_1, c?.image_1, c?.square
-    )
-  );
-  const u2 = pickUrl(
-    pickFirst(
-      c?.banners?.image_2, c?.banners?.wide, c?.banners?.logo_2,
-      c?.banner_2, c?.image_2, c?.wide
-    )
-  );
-
-  // If both exist, choose by ratio when possible
-  const ratio = async (u)=> {
-    if(!u) return 0;
-    return new Promise(res=>{
-      const im=new Image();
-      im.onload=()=>res((im.naturalWidth||0)/((im.naturalHeight||1)||1));
-      im.onerror=()=>res(0);
-      im.src=u;
-    });
-  };
-  const [r1,r2] = await Promise.all([ratio(u1), ratio(u2)]);
-  const wide = (r1 >= r2) ? u2 : u1;   // prefer the more "wide" ratio
-  const square = (r1 >= r2) ? u1 : u2;
-  const cta = String(c?.banners?.cta || c?.cta || "").trim();
+// Support multiple naming conventions (strict mapping, no ratio guessing)
+const b = c?.banners || c?.banner || c || {};
+const wide = pickUrl(pickFirst(
+  b?.banner_1, b?.image_1, b?.wide, b?.banner_wide, b?.image_wide, b?.logo_2,
+  c?.banner_1, c?.image_1, c?.wide
+));
+const square = pickUrl(pickFirst(
+  b?.banner_2, b?.image_2, b?.square, b?.banner_square, b?.image_square, b?.logo_1,
+  c?.banner_2, c?.image_2, c?.square
+));
+const cta = String(b?.cta || c?.cta || "").trim();
   return { wide, square, cta };
 }
 
@@ -2420,34 +2433,19 @@ function blocMatches(bloc, slug, iso) {
           it: "Spiacenti, questa scheda non è ancora disponibile per questo Paese."
         };
 
-        const shouldWarn = desiredLang && desiredLang !== "fr" && contentLang === "fr";
-        if (shouldWarn) {
-          const main = ROOT.querySelector("main");
-          if (main) {
-            const grid = main.querySelector(".grid");
-            if (grid) grid.style.display = "none";
-
-            const card = document.createElement("div");
-            card.className = "card";
-            const msg = msgByLang[desiredLang] || msgByLang.en;
-            card.innerHTML = `
-              <div class="p-6">
-                <div class="flex items-start gap-3">
-                  <div class="w-10 h-10 rounded-2xl bg-[var(--ul-purple-50)] flex items-center justify-center">
-                    <span class="text-[var(--ul-purple-700)] font-bold">i</span>
-                  </div>
-                  <div>
-                    <div class="text-sm font-semibold text-[var(--ul-text)]">Information</div>
-                    <div class="text-base text-[var(--ul-muted)] mt-1">${escapeHTML(msg)}</div>
-                  </div>
-                </div>
-              </div>
-            `;
-            main.prepend(card);
-
-            // Also update the short description to the same message
-            setText("accroche-metier", msg);
-          }
+        // If the requested country language isn't available in the CMS yet,
+// block the page with a loader-style message (requested UX).
+const shouldBlock = desiredLang && contentLang && desiredLang !== contentLang;
+if (shouldBlock) {
+  try {
+    hideLoaderOverlay();
+    showMessageOverlay(
+      "Sorry, this job is not available in your country at the moment.",
+      "Please select another country."
+    );
+  } catch(e) {}
+  return;
+}
 
           // Stop here so we don't render FR-only sections.
           // Banners (sponsor / non-sponsor) remain handled below.
