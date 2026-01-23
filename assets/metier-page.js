@@ -2479,3 +2479,34 @@ function blocMatches(bloc, slug, iso) {
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
   else boot().catch(e => overlayError("Boot failed", e));
 })();
+
+
+/* =========================
+   Ulydia FINAL PATCH — Robust Fallback Mapping (NO DEBUG)
+   Rule: width >= height => WIDE | height > width => SQUARE
+========================= */
+async function classifyBanner(url) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ url, type: img.width >= img.height ? "wide" : "square", w: img.width, h: img.height });
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
+async function applyFallbackBanners(fallbackUrls = []) {
+  const results = (await Promise.all(fallbackUrls.map(classifyBanner))).filter(Boolean);
+  const wide = results.find(r => r.type === "wide");
+  const square = results.find(r => r.type === "square");
+  if (typeof setWideBanner === "function" && wide) setWideBanner(wide.url);
+  if (typeof setSquareBanner === "function" && square) setSquareBanner(square.url);
+}
+
+// Auto-apply if legacy vars exist (order-agnostic)
+try {
+  const urls = [];
+  if (typeof fallbackWideUrl === "string") urls.push(fallbackWideUrl);
+  if (typeof fallbackSquareUrl === "string") urls.push(fallbackSquareUrl);
+  if (typeof fallbackUrls === "object" && Array.isArray(fallbackUrls)) urls.push(...fallbackUrls);
+  if (urls.length) applyFallbackBanners(urls);
+} catch(e) {}
