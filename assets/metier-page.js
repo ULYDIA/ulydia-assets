@@ -227,34 +227,60 @@ try {
       return root;
     }
 
+  // ---------------------------------------------------------
+  // Ensure TEMPLATE HEADER is ABOVE the metier page (root placed AFTER header)
+  // Works even if header/root are in different parents.
+  // ---------------------------------------------------------
+  function getTemplateHeaderEl(){
+    return (
+      document.querySelector("[data-ulydia-header]") ||
+      document.querySelector(".w-nav") ||
+      document.querySelector("nav") ||
+      document.querySelector("[role='banner']") ||
+      document.querySelector(".navbar") ||
+      document.querySelector(".nav") ||
+      document.querySelector("header")
+    );
+  }
 
-  // ---------------------------------------------------------
-  // Force Webflow header ABOVE the metier page root
-  // (Some templates may place header after main; this fixes DOM order safely)
-  // ---------------------------------------------------------
-  function fixHeaderAboveMetier() {
+  function placeRootAfterTemplateHeader() {
     const root = document.getElementById("ulydia-metier-root");
     if (!root) return;
 
-    const header =
-      document.querySelector("[data-ulydia-header]") ||
-      document.querySelector(".w-nav") ||
-      document.querySelector("header");
-
+    const header = getTemplateHeaderEl();
     if (!header || !header.parentNode) return;
 
-    // If header is AFTER the root in DOM, move it just before root
-    const headerAfterRoot = !!(root.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING);
-    if (headerAfterRoot) {
-      root.parentNode.insertBefore(header, root);
-    }
+    // If root is already after header (in DOM order), do nothing
+    try {
+      const rootAfterHeader = !!(header.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING);
+      if (rootAfterHeader) return;
+    } catch(_) {}
+
+    // Move root right AFTER header (most reliable)
+    header.parentNode.insertBefore(root, header.nextSibling);
   }
 
-  function fixHeaderAboveMetierRetry() {
+  function placeRootAfterTemplateHeaderRetry() {
     let tries = 0;
     (function tick() {
       tries++;
-      try { fixHeaderAboveMetier(); } catch(_) {}
+      try { placeRootAfterTemplateHeader(); } catch(_) {}
+
+      const header = getTemplateHeaderEl();
+      const root = document.getElementById("ulydia-metier-root");
+
+      // stop if header exists and root is after it
+      if (header && root) {
+        try {
+          const ok = !!(header.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING);
+          if (ok) return;
+        } catch(_) {}
+      }
+      if (tries > 60) return; // ~3s max
+      setTimeout(tick, 50);
+    })();
+  }
+
 
       const header =
         document.querySelector("[data-ulydia-header]") ||
@@ -2083,7 +2109,7 @@ function blocMatches(bloc, slug, iso) {
   // ---------- Boot ----------
   async function boot() {
     const root = ensureRoot();
-        try { fixHeaderAboveMetierRetry(); } catch(_) {}
+        try { placeRootAfterTemplateHeaderRetry(); } catch(_) {}
 // Keep page blank + show centered loader
     try{ root.innerHTML = ""; }catch(_){}
     showLoaderOverlay("Chargement de la fiche métier…");
