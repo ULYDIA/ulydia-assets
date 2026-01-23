@@ -1,4 +1,4 @@
-/* metier-page.v12.4.js — Ulydia
+/* metier-page.v12.6.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
       - sponsor_logo_2 => wide (top)
@@ -13,9 +13,12 @@
    ✅ FAQ: no flicker (hard hidden + cleared, shown only with data)
 */
 (() => {
-  if (window.__ULYDIA_METIER_BOOT__ || window.__ULYDIA_METIER_V118__) return;
+  if (window.__ULYDIA_METIER_BOOT__) return;
   window.__ULYDIA_METIER_BOOT__ = true;
+
+  if (window.__ULYDIA_METIER_V118__) return;
   window.__ULYDIA_METIER_V118__ = true;
+
   const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const CATALOG_URL = `${ASSETS_BASE}/catalog.json`;
 
@@ -157,33 +160,21 @@ try {
 
 
   function ensureRoot() {
-    // Ensure a SINGLE root (prevents double "Chargement…" overlays)
-    const roots = Array.from(document.querySelectorAll("#ulydia-metier-root"));
-    if (roots.length > 1) {
-      roots.slice(1).forEach(r => { try { r.remove(); } catch(_) {} });
-    }
-    let root = roots[0] || document.getElementById("ulydia-metier-root");
-    if (!root) {
-      root = document.createElement("div");
-      root.id = "ulydia-metier-root";
-      document.body.prepend(root);
-    }
+    let root = document.getElementById("ulydia-metier-root");
+    if (!root) { root = document.createElement("div"); root.id = "ulydia-metier-root"; document.body.prepend(root); }
     return root;
   }
-
-  function renderPlaceholder() {
-    const root = ensureRoot();
+  function renderPlaceholder(root) {
     root.innerHTML = `
-      <div style="padding:16px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial">
+      <div style="padding:16px;font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial">
         <div style="display:flex;align-items:center;gap:10px">
-          <div style="width:10px;height:10px;border-radius:999px;background:#6366f1"></div>
-          <div style="font-weight:700">Chargement…</div>
+          <div style="width:10px;height:10px;border-radius:999px;background:#7c3aed"></div>
+          <div style="font-weight:700">Ulydia — loading metier page…</div>
         </div>
-        <div style="margin-top:6px;color:#64748b;font-size:13px">Préparation de la fiche métier</div>
+        <div style="margin-top:6px;color:#6b7280;font-size:13px">If this stays visible, check Console for errors.</div>
       </div>
     `;
   }
-
   function renderShell(root) { root.innerHTML = `<div class="w-full h-full" style="background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);"><!-- Barre de Filtres -->
    <div class="w-full" style="background: white; border-bottom: 2px solid var(--border); box-shadow: 0 2px 8px rgba(0,0,0,.05);">
     <div class="max-w-[1200px] mx-auto px-6 py-4">
@@ -1340,16 +1331,16 @@ try {
     const nb = document.getElementById("sponsor-name-banner");
     const ns = document.getElementById("sponsor-name-sidebar");
     if (nb) nb.textContent = "";
-    if (ns) ns.textContent = "";
-
-    // FAQ: hide + clear
+    if (ns) ns.textContent = "";    // FAQ: hide + clear
     const faqCard = cardByTitleId("faq-title");
     if (faqCard) {
       faqCard.style.display = "none";
-      const wrap = faqCard.querySelector(".space-y-3");
+      // clear common containers
+      const wrap = faqCard.querySelector(".space-y-3") || faqCard.querySelector("[data-ul-faqs]");
       if (wrap) wrap.innerHTML = "";
+      // also remove any hardcoded FAQ items that could be present in the template
+      faqCard.querySelectorAll(".faq-item").forEach(n => n.remove());
     }
-
     // Metier_Pays_Bloc rich sections in template: hide + clear
     ["acces-title","marche-title","salaire-title","formation-title"].forEach(id => {
       const c = cardByTitleId(id);
@@ -1616,9 +1607,8 @@ const fb = await resolveCountryBanners(iso, payload);
     const link2 = wfLink || String(sObj?.link || sObj?.url || "").trim();
     const name2 = wfName || String(sObj?.name || "").trim();
 
-    const hasSponsor = !!(payload?.sponsor?.active || wideUrl2 || squareUrl2 || name2 || link2);
-
-    if (hasSponsor) {
+    const hasSponsor = (payload?.sponsor?.active === true) || !!(wideUrl2 || squareUrl2);
+if (hasSponsor) {
       hideNonSponsorBanners();
       // IMPORTANT: if sponsor exists, do NOT show fallback banners
       replaceWideBannerWithImg(wideA, wideUrl2, "");        // no fallback
@@ -1825,7 +1815,7 @@ function blocMatches(bloc, slug, iso) {
   // ---------- Boot ----------
   async function boot() {
     const root = ensureRoot();
-    renderPlaceholder();
+    renderPlaceholder(root);
 
     ensureLink("ulydia-font-outfit", "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap");
     ensureScript("ulydia-tailwind", "https://cdn.tailwindcss.com");
@@ -2180,13 +2170,15 @@ function blocMatches(bloc, slug, iso) {
     const slug = getSlug();
     console.log("[metier-page] v12.4 boot", { iso, slug });
 
-    try { root.innerHTML = ""; renderShell(root); }
+    try { renderShell(root); }
     catch (e) { overlayError("Render shell failed", e); return; }
 
     // MUST happen immediately after shell render (prevents placeholders)
     killTemplatePlaceholdersNow();
 
     const payload = await fetchMetierPayload({ iso, slug });
+
+    const lang = String(payload?.lang || payload?.pays?.langue_finale || payload?.pays?.lang || "").trim().toLowerCase();
 
     // Sponsor
     applySponsor({ iso, slug, payload }).catch(e => overlayError("Apply sponsor failed", e));
@@ -2241,7 +2233,29 @@ function blocMatches(bloc, slug, iso) {
     if (!Array.isArray(faqList) || faqList.length === 0) {
       faqList = await tryFetchFaqs();
     }
-    renderFAQ(Array.isArray(faqList) ? faqList : []);
+
+    // ✅ Safety: if Worker returns "all FAQs", filter client-side by (slug, iso, lang)
+    function faqMatches(item){
+      if (!item) return false;
+      const iso2 = String(item.iso || item.country_code || item.code_iso || item.country || "").trim().toUpperCase();
+      const lang2 = String(item.lang || item.langue || item.language || "").trim().toLowerCase();
+      const s2 = String(item.job_slug || item.metier_slug || item.slug || item.metier || item.job || "").trim();
+
+      if (iso2 && iso2 !== iso) return false;
+      if (lang2 && lang2 !== lang) return false;
+
+      if (s2) return s2 === slug;
+
+      // If no explicit slug, keep it only if clearly generic (global FAQ)
+      const scope = String(item.scope || item.type || "").toLowerCase();
+      if (scope.includes("global") || scope.includes("general")) return true;
+
+      // By default, reject unscoped FAQs
+      return false;
+    }
+
+    const faqFiltered = Array.isArray(faqList) ? faqList.filter(faqMatches) : [];
+    renderFAQ(faqFiltered);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
