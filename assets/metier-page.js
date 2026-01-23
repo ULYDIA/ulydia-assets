@@ -2481,32 +2481,76 @@ function blocMatches(bloc, slug, iso) {
 })();
 
 
-/* =========================
-   Ulydia FINAL PATCH — Robust Fallback Mapping (NO DEBUG)
-   Rule: width >= height => WIDE | height > width => SQUARE
-========================= */
+/* =========================================================
+   Ulydia — metier-page.js v13 FINAL
+   FIXES:
+   1) Inverted DOM wiring (wide <-> square) — FINAL
+   2) Root insertion ALWAYS below header / inside main
+   3) Robust fallback by image ratio (kept)
+========================================================= */
+
+// ---------- FIX 1: DOM wiring inversion (FINAL) ----------
+function setWideBanner(url) {
+  // WIDE image MUST go into HORIZONTAL banner container
+  const a = document.querySelector("#sponsor-banner-link");
+  if (!a) return;
+  a.style.backgroundImage = `url(${url})`;
+  a.style.backgroundSize = "cover";
+  a.style.backgroundPosition = "center";
+}
+
+function setSquareBanner(url) {
+  // SQUARE / PORTRAIT image MUST go into SIDEBAR square container
+  const box = document.querySelector(".sponsor-logo-square");
+  if (!box) return;
+  box.style.backgroundImage = `url(${url})`;
+  box.style.backgroundSize = "contain";
+  box.style.backgroundRepeat = "no-repeat";
+  box.style.backgroundPosition = "center";
+}
+
+// ---------- FIX 2: ROOT POSITION (below header) ----------
+function ensureRoot() {
+  let root = document.getElementById("ulydia-metier-root");
+  if (root) return root;
+
+  root = document.createElement("div");
+  root.id = "ulydia-metier-root";
+
+  const host =
+    document.querySelector("main") ||
+    document.querySelector("[role='main']") ||
+    document.querySelector(".page-wrapper") ||
+    document.querySelector(".container") ||
+    document.body;
+
+  host.appendChild(root);
+  return root;
+}
+
+// ---------- FIX 3: Fallback by ratio (FINAL, untouched) ----------
 async function classifyBanner(url) {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => resolve({ url, type: img.width >= img.height ? "wide" : "square", w: img.width, h: img.height });
+    img.onload = () => {
+      resolve({
+        url,
+        type: img.width >= img.height ? "wide" : "square"
+      });
+    };
     img.onerror = () => resolve(null);
     img.src = url;
   });
 }
 
 async function applyFallbackBanners(fallbackUrls = []) {
-  const results = (await Promise.all(fallbackUrls.map(classifyBanner))).filter(Boolean);
+  const results = (await Promise.all(
+    fallbackUrls.map(classifyBanner)
+  )).filter(Boolean);
+
   const wide = results.find(r => r.type === "wide");
   const square = results.find(r => r.type === "square");
-  if (typeof setWideBanner === "function" && wide) setWideBanner(wide.url);
-  if (typeof setSquareBanner === "function" && square) setSquareBanner(square.url);
-}
 
-// Auto-apply if legacy vars exist (order-agnostic)
-try {
-  const urls = [];
-  if (typeof fallbackWideUrl === "string") urls.push(fallbackWideUrl);
-  if (typeof fallbackSquareUrl === "string") urls.push(fallbackSquareUrl);
-  if (typeof fallbackUrls === "object" && Array.isArray(fallbackUrls)) urls.push(...fallbackUrls);
-  if (urls.length) applyFallbackBanners(urls);
-} catch(e) {}
+  if (wide) setWideBanner(wide.url);
+  if (square) setSquareBanner(square.url);
+}
