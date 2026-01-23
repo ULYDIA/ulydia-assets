@@ -203,21 +203,41 @@ try {
 
 
   function ensureRoot() {
-    // Prefer the placeholder already present in Webflow
+    // 1) Prefer existing root placeholder
     let root = document.getElementById("ulydia-metier-root");
     if (root) return root;
 
-    // Create it (but insert at the RIGHT place: after Webflow header / inside main)
+    // 2) If template provides a host, reuse it
+    const hostAttr =
+      document.querySelector("[data-ulydia-metier-root]") ||
+      document.querySelector("[data-ulydia-metier-host]");
+
+    if (hostAttr) {
+      hostAttr.id = "ulydia-metier-root";
+      return hostAttr;
+    }
+
+    // 3) Heuristic: adopt template loading placeholder container if present
+    try {
+      const needle = "Chargement de la fiche métier";
+      const candidates = Array.from(document.querySelectorAll("div, section, main")).slice(0, 800);
+      const ph = candidates.find(el => {
+        const t = (el.textContent || "").replace(/\s+/g," ").trim();
+        if (!t.includes(needle)) return false;
+        const r = el.getBoundingClientRect();
+        return r && r.height > 80 && r.width > 200;
+      });
+      if (ph) {
+        ph.id = "ulydia-metier-root";
+        return ph;
+      }
+    } catch(_) {}
+
+    // 4) Create root and insert in a reasonable place
     root = document.createElement("div");
     root.id = "ulydia-metier-root";
 
-    const headerEl =
-      document.querySelector("[data-ulydia-header]") ||
-      document.querySelector(".w-nav") ||
-      document.querySelector("header");
-
     const mainEl =
-      document.querySelector("[data-ulydia-metier-host]") ||
       document.querySelector("main") ||
       document.querySelector("[role='main']") ||
       document.querySelector(".w-dyn-list, .w-dyn-items");
@@ -227,11 +247,30 @@ try {
       return root;
     }
 
+    // Fallback: append to body
+    (document.body || document.documentElement).appendChild(root);
+    return root;
+  }
+
   // ---------------------------------------------------------
   // Ensure TEMPLATE HEADER is ABOVE the metier page (root placed AFTER header)
   // Works even if header/root are in different parents.
   // ---------------------------------------------------------
-  function getTemplateHeaderEl(){
+  
+  function hideTemplateLoadingPlaceholder(){
+    try{
+      const needle = "Chargement de la fiche métier";
+      const els = Array.from(document.querySelectorAll("body *")).filter(el => {
+        const t = (el.textContent || "").replace(/\s+/g," ").trim();
+        return t && t.includes(needle);
+      });
+      els.forEach(el => {
+        if (el.id !== "ulydia-metier-root") el.style.display = "none";
+      });
+    }catch(_){}
+  }
+
+function getTemplateHeaderEl(){
     return (
       document.querySelector("[data-ulydia-header]") ||
       document.querySelector(".w-nav") ||
@@ -2107,8 +2146,7 @@ function blocMatches(bloc, slug, iso) {
   }
 
   // ---------- Boot ----------
-  async function boot() {
-    const root = ensureRoot();
+  \1    try { hideTemplateLoadingPlaceholder(); } catch(_) {}
         try { placeRootAfterTemplateHeaderRetry(); } catch(_) {}
 // Keep page blank + show centered loader
     try{ root.innerHTML = ""; }catch(_){}
