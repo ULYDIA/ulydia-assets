@@ -207,17 +207,33 @@ try {
     let root = document.getElementById("ulydia-metier-root");
     if (root) return root;
 
-    // If missing, create it but DO NOT prepend (would push Webflow header to the bottom)
+    // Create it (but insert at the RIGHT place: after Webflow header / inside main)
     root = document.createElement("div");
     root.id = "ulydia-metier-root";
 
-    const host =
+    const headerEl =
+      document.querySelector("[data-ulydia-header]") ||
+      document.querySelector(".w-nav") ||
+      document.querySelector("header");
+
+    const mainEl =
       document.querySelector("[data-ulydia-metier-host]") ||
       document.querySelector("main") ||
-      document.querySelector(".w-dyn-list, .w-dyn-items") ||
-      document.body;
+      document.querySelector("[role='main']") ||
+      document.querySelector(".w-dyn-list, .w-dyn-items");
 
-    host.appendChild(root);
+    if (mainEl) {
+      mainEl.appendChild(root);
+      return root;
+    }
+
+    if (headerEl && headerEl.parentNode) {
+      headerEl.parentNode.insertBefore(root, headerEl.nextSibling);
+      return root;
+    }
+
+    // Fallback: append to body (should be rare)
+    (document.body || document.documentElement).appendChild(root);
     return root;
   }
   function renderPlaceholder(root) {
@@ -1608,8 +1624,8 @@ async function resolveCountryBanners(iso, payload) {
     });
   };
   const [r1,r2] = await Promise.all([ratio(u1), ratio(u2)]);
-  const wide = (r1 >= r2) ? u2 : u1;   // prefer the more "wide" ratio
-  const square = (r1 >= r2) ? u1 : u2;
+  const wide = (r1 >= r2) ? u1 : u2;   // prefer the more "wide" ratio
+  const square = (r1 >= r2) ? u2 : u1;
   const cta = String(c?.banners?.cta || c?.cta || "").trim();
   return { wide, square, cta };
 }
@@ -2476,81 +2492,21 @@ function blocMatches(bloc, slug, iso) {
     hideLoaderOverlay();
 }
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
-  else boot().catch(e => overlayError("Boot failed", e));
+  function waitForHostThenBoot(){
+    let tries = 0;
+    (function tick(){
+      tries++;
+      // try to ensure root can be placed correctly (header/main present)
+      const hasMain = !!(document.querySelector("main") || document.querySelector("[role='main']") || document.querySelector(".w-dyn-list, .w-dyn-items") || document.querySelector("[data-ulydia-metier-host]"));
+      const hasHeader = !!(document.querySelector(".w-nav") || document.querySelector("header") || document.querySelector("[data-ulydia-header]"));
+      if (hasMain || hasHeader || tries > 80) { // ~4s max
+        boot().catch(e => overlayError("Boot failed", e));
+        return;
+      }
+      setTimeout(tick, 50);
+    })();
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", waitForHostThenBoot);
+  else waitForHostThenBoot();
 })();
-
-
-/* =========================================================
-   Ulydia — metier-page.js v13 FINAL
-   FIXES:
-   1) Inverted DOM wiring (wide <-> square) — FINAL
-   2) Root insertion ALWAYS below header / inside main
-   3) Robust fallback by image ratio (kept)
-========================================================= */
-
-// ---------- FIX 1: DOM wiring inversion (FINAL) ----------
-function setWideBanner(url) {
-  // WIDE image MUST go into HORIZONTAL banner container
-  const a = document.querySelector("#sponsor-banner-link");
-  if (!a) return;
-  a.style.backgroundImage = `url(${url})`;
-  a.style.backgroundSize = "cover";
-  a.style.backgroundPosition = "center";
-}
-
-function setSquareBanner(url) {
-  // SQUARE / PORTRAIT image MUST go into SIDEBAR square container
-  const box = document.querySelector(".sponsor-logo-square");
-  if (!box) return;
-  box.style.backgroundImage = `url(${url})`;
-  box.style.backgroundSize = "contain";
-  box.style.backgroundRepeat = "no-repeat";
-  box.style.backgroundPosition = "center";
-}
-
-// ---------- FIX 2: ROOT POSITION (below header) ----------
-function ensureRoot() {
-  let root = document.getElementById("ulydia-metier-root");
-  if (root) return root;
-
-  root = document.createElement("div");
-  root.id = "ulydia-metier-root";
-
-  const host =
-    document.querySelector("main") ||
-    document.querySelector("[role='main']") ||
-    document.querySelector(".page-wrapper") ||
-    document.querySelector(".container") ||
-    document.body;
-
-  host.appendChild(root);
-  return root;
-}
-
-// ---------- FIX 3: Fallback by ratio (FINAL, untouched) ----------
-async function classifyBanner(url) {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      resolve({
-        url,
-        type: img.width >= img.height ? "wide" : "square"
-      });
-    };
-    img.onerror = () => resolve(null);
-    img.src = url;
-  });
-}
-
-async function applyFallbackBanners(fallbackUrls = []) {
-  const results = (await Promise.all(
-    fallbackUrls.map(classifyBanner)
-  )).filter(Boolean);
-
-  const wide = results.find(r => r.type === "wide");
-  const square = results.find(r => r.type === "square");
-
-  if (wide) setWideBanner(wide.url);
-  if (square) setSquareBanner(square.url);
-}
