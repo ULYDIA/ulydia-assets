@@ -1,5 +1,4 @@
-window.__METIER_PAGE_BUILD__ = "metier-page FULL v2026-01-23.16h10 (fallback strict b1->wide b2->square)";
-console.log("✅", window.__METIER_PAGE_BUILD__);
+
 /*
  metier-page.full.country.v3.patched.v7.js
  ------------------------------------------------
