@@ -1,4 +1,4 @@
-/* metier-page.v12.9.js — Ulydia
+/* metier-page.v12.4.js — Ulydia
    Fixes requested:
    ✅ Sponsor mapping STRICT:
       - sponsor_logo_2 => wide (top)
@@ -48,7 +48,7 @@
     try {
       const msg = err ? (err.stack || err.message || String(err)) : "";
       console.error("[metier.v12.4]", title, err);
-
+      try{ hideLoaderOverlay(); }catch(_e){}
 try {
   const h1 = document.getElementById("metier-title") || document.querySelector("h1");
   if (h1) h1.textContent = "Erreur de chargement";
@@ -73,7 +73,7 @@ try {
         box.style.font = "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
         document.body.appendChild(box);
       }
-      box.textContent = `[metier-page.v12.8] ${title}\n\n${msg}`;
+      box.textContent = `[metier-page.v12.4] ${title}\n\n${msg}`;
     } catch(_) {}
   }
 
@@ -157,24 +157,77 @@ try {
 
 
   function ensureRoot() {
-    // Prefer the placeholder already present in Webflow
+    // Prefer existing placeholder in Webflow (do not move the header/nav)
     let root = document.getElementById("ulydia-metier-root");
     if (root) return root;
 
-    // If missing, create it but DO NOT prepend (would push Webflow header to the bottom)
+    // If multiple roots exist somehow, keep the first
+    const roots = Array.from(document.querySelectorAll("#ulydia-metier-root"));
+    if (roots.length) return roots[0];
+
     root = document.createElement("div");
     root.id = "ulydia-metier-root";
 
-    const host =
-      document.querySelector("[data-ulydia-metier-host]") ||
-      document.querySelector("main") ||
-      document.querySelector(".w-dyn-list, .w-dyn-items") ||
-      document.body;
+    // Insert AFTER the main header/nav if present, otherwise into main, otherwise append to body
+    const header = document.querySelector("header, nav, .navbar, .w-nav, .w-nav-overlay");
+    if (header && header.parentNode) {
+      header.insertAdjacentElement("afterend", root);
+      return root;
+    }
+    const main = document.querySelector("main");
+    if (main) { main.prepend(root); return root; }
 
-    host.appendChild(root);
+    document.body.appendChild(root);
     return root;
   }
-  function renderPlaceholder(root) {
+  
+  // =========================================================
+  // Loader overlay (same spirit as sponsoring)
+  // =========================================================
+  function injectOverlayStylesOnce(){
+    if (document.getElementById("ulydia_overlay_styles")) return;
+    const st = document.createElement("style");
+    st.id = "ulydia_overlay_styles";
+    st.textContent = `
+      .u-overlay{position:fixed;inset:0;z-index:999999;background:rgba(248,250,252,.82);backdrop-filter:saturate(180%) blur(6px);display:flex;align-items:flex-start;justify-content:center;padding-top:64px}
+      .u-overlayCard{width:min(640px, calc(100vw - 24px));background:#fff;border:1px solid rgba(148,163,184,.45);box-shadow:0 10px 30px rgba(15,23,42,.10);border-radius:18px;padding:18px}
+      .u-overlayRow{display:flex;gap:14px;align-items:center}
+      .u-spinner{width:20px;height:20px;border-radius:999px;border:2px solid rgba(99,102,241,.25);border-top-color:rgba(99,102,241,1);animation:spin 1s linear infinite}
+      @keyframes spin{to{transform:rotate(360deg)}}
+      .u-overlayTitle{font:600 14px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Arial;color:#0f172a}
+      .u-overlaySub{font:500 12px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Arial;color:#64748b;margin-top:2px}
+    `;
+    document.head.appendChild(st);
+  }
+  function showLoaderOverlay(message){
+    injectOverlayStylesOnce();
+    let ov = document.getElementById("ulydia_overlay_loader");
+    if (!ov){
+      ov = document.createElement("div");
+      ov.id = "ulydia_overlay_loader";
+      ov.className = "u-overlay";
+      ov.innerHTML = `
+        <div class="u-overlayCard">
+          <div class="u-overlayRow">
+            <div class="u-spinner"></div>
+            <div>
+              <div class="u-overlayTitle" id="ulydia_overlay_title"></div>
+              <div class="u-overlaySub">Please wait a moment.</div>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(ov);
+    }
+    const t = document.getElementById("ulydia_overlay_title");
+    if (t) t.textContent = message || "Loading…";
+  }
+  function hideLoaderOverlay(){
+    const ov = document.getElementById("ulydia_overlay_loader");
+    if (ov) ov.remove();
+  }
+
+function renderPlaceholder(root) {
     root.innerHTML = `
       <div style="padding:16px;font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial">
         <div style="display:flex;align-items:center;gap:10px">
@@ -1342,8 +1395,16 @@ try {
     const ns = document.getElementById("sponsor-name-sidebar");
     if (nb) nb.textContent = "";
     if (ns) ns.textContent = "";
-    // FAQ: keep template visible by default (renderFAQ will replace only when payload provides relevant items)
-// Metier_Pays_Bloc rich sections in template: hide + clear
+
+    // FAQ: hide + clear
+    const faqCard = cardByTitleId("faq-title");
+    if (faqCard) {
+      faqCard.style.display = "none";
+      const wrap = faqCard.querySelector(".space-y-3");
+      if (wrap) wrap.innerHTML = "";
+    }
+
+    // Metier_Pays_Bloc rich sections in template: hide + clear
     ["acces-title","marche-title","salaire-title","formation-title"].forEach(id => {
       const c = cardByTitleId(id);
       if (c) {
@@ -1419,95 +1480,36 @@ async function resolveCountryBanners(iso, payload) {
 
   const pick = (...vals) => pickUrl(pickFirst(...vals));
 
-
-  // Build candidate lists (Webflow field naming is sometimes inconsistent, so we choose by aspect ratio)
-  const wideCandidates = [
-    pick(
-      pB?.wide, pB?.banner_wide, pB?.image_wide, pB?.imageWide,
-      pPays?.banner_wide, pPays?.banniere_wide, pPays?.banniere_2, pPays?.image_2,
-      payload?.banner_wide, payload?.banniere_wide
-    ),
-    // sometimes stored in logo_1
-    pick(
-      pB?.logo_2, pB?.image_2, pPays?.image_2,
-      pB?.logo_1, pB?.image_1, pPays?.image_1,
-      pPays?.banniere_1, pPays?.banniere_2
-    )
-  ].filter(Boolean);
-
-  const squareCandidates = [
-    pick(
-      pB?.square, pB?.banner_square, pB?.image_square, pB?.imageSquare,
-      pPays?.banner_square, pPays?.banniere_square, pPays?.banniere_1, pPays?.image_1,
-      payload?.banner_square, payload?.banniere_square
-    ),
-    // sometimes stored in logo_2
-    pick(
-      pB?.logo_1, pB?.image_1, pPays?.image_1,
-      pB?.logo_2, pB?.image_2, pPays?.image_2,
-      pPays?.banniere_1, pPays?.banniere_2
-    )
-  ].filter(Boolean);
-
+  const fromPayloadWide = pick(
+    pB?.wide, pB?.banner_wide, pB?.image_wide, pB?.imageWide, pB?.logo_2, pB?.image_2,
+    pPays?.banner_wide, pPays?.banniere_wide, pPays?.banniere_2, pPays?.image_2,
+    payload?.banner_wide, payload?.banniere_wide
+  );
+  const fromPayloadSquare = pick(
+    pB?.square, pB?.banner_square, pB?.image_square, pB?.imageSquare, pB?.logo_1, pB?.image_1,
+    pPays?.banner_square, pPays?.banniere_square, pPays?.banniere_1, pPays?.image_1,
+    payload?.banner_square, payload?.banniere_square
+  );
   const fromPayloadCTA = String(pB?.cta || pPays?.cta || "").trim();
 
-  async function measure(url){
-    return await new Promise((resolve) => {
-      if (!url) return resolve(null);
-      const img = new Image();
-      let done = false;
-      const t = setTimeout(() => { if (!done){ done=true; resolve(null); } }, 2500);
-      img.onload = () => { if (done) return; done=true; clearTimeout(t); resolve({w: img.naturalWidth||0, h: img.naturalHeight||0}); };
-      img.onerror = () => { if (done) return; done=true; clearTimeout(t); resolve(null); };
-      img.src = url;
-    });
-  }
-
-  async function chooseBest(wideCands, squareCands){
-    const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
-    wideCands = uniq(wideCands);
-    squareCands = uniq(squareCands);
-
-    // If we only have 0/1 total URLs, trivial
-    const all = uniq([...wideCands, ...squareCands]);
-    if (all.length <= 1) return { wide: all[0] || "", square: all[0] || "" };
-
-    // Measure up to 4 urls (keep it cheap)
-    const urls = all.slice(0, 4);
-    const dims = await Promise.all(urls.map(u => measure(u)));
-    const ars = urls.map((u,i) => {
-      const d = dims[i];
-      const ar = d && d.w && d.h ? (d.w / d.h) : 0;
-      return {u, ar};
-    }).filter(x => x.ar > 0);
-
-    // If we can't measure, fallback to first candidates
-    if (ars.length === 0) {
-      return { wide: wideCands[0] || squareCands[0] || "", square: squareCands[0] || wideCands[0] || "" };
+  if (fromPayloadWide || fromPayloadSquare) {
+    // If both exist, enforce by ratio (some CMS fields get swapped)
+    if (fromPayloadWide && fromPayloadSquare) {
+      const ratio = (u)=> new Promise(res=>{
+        const im=new Image();
+        im.onload=()=>res((im.naturalWidth||0)/((im.naturalHeight||1)||1));
+        im.onerror=()=>res(0);
+        im.src=u;
+      });
+      const [rw, rs] = await Promise.all([ratio(fromPayloadWide), ratio(fromPayloadSquare)]);
+      // choose wide as higher ratio; square as closest to 1
+      let wide = (rw >= rs) ? fromPayloadWide : fromPayloadSquare;
+      const dw = Math.abs(rw - 1), ds = Math.abs(rs - 1);
+      let square = (dw <= ds) ? fromPayloadWide : fromPayloadSquare;
+      if (wide === square) square = (wide === fromPayloadWide) ? fromPayloadSquare : fromPayloadWide;
+      return { wide, square, cta: fromPayloadCTA };
     }
-
-    // Wide = max aspect ratio (most landscape)
-    const widePick = ars.reduce((best,cur) => cur.ar > best.ar ? cur : best, ars[0]).u;
-
-    // Square = closest to 1.0 (or, if none, smallest aspect)
-    const squarePick = ars.reduce((best,cur) => {
-      const dist = Math.abs(cur.ar - 1);
-      const bestDist = Math.abs(best.ar - 1);
-      return dist < bestDist ? cur : best;
-    }, ars[0]).u;
-
-    // If picks collide, take next best for square
-    if (squarePick === widePick && ars.length > 1) {
-      const sorted = ars.slice()
-      return { wide: widePick, square: (ars.slice().sort((a,b)=>Math.abs(a.ar-1)-Math.abs(b.ar-1)).find(x=>x.u!==widePick) || {u:widePick}).u };
-    }
-
-    return { wide: widePick, square: squarePick };
-  }
-
-  if (wideCandidates.length || squareCandidates.length) {
-    const best = await chooseBest(wideCandidates, squareCandidates);
-    return { wide: best.wide || wideCandidates[0] || "", square: best.square || squareCandidates[0] || "", cta: fromPayloadCTA };
+    return { wide: fromPayloadWide, square: fromPayloadSquare, cta: fromPayloadCTA };
   }
 
   // 2) Fallback to catalog.json countries map (legacy)
@@ -1530,7 +1532,7 @@ async function resolveCountryBanners(iso, payload) {
     )
   );
 
-  // If both exist, choose by ratio when possible
+  // If both exist, choose by ratio when possible (landscape => wide, closest-to-1 => square)
   const ratio = async (u)=> {
     if(!u) return 0;
     return new Promise(res=>{
@@ -1541,8 +1543,20 @@ async function resolveCountryBanners(iso, payload) {
     });
   };
   const [r1,r2] = await Promise.all([ratio(u1), ratio(u2)]);
-  const wide = (r1 >= r2) ? u2 : u1;   // prefer the more "wide" ratio
-  const square = (r1 >= r2) ? u1 : u2;
+
+  // decide wide = higher ratio (more landscape). decide square = ratio closest to 1.
+  let wide = u2, square = u1;
+  if (r1 && r2) {
+    wide = (r1 >= r2) ? u1 : u2;
+    const d1 = Math.abs(r1 - 1), d2 = Math.abs(r2 - 1);
+    square = (d1 <= d2) ? u1 : u2;
+    // if wide and square end up identical, keep fallback order
+    if (wide === square) { wide = (r1 >= r2) ? u1 : u2; square = (wide === u1) ? u2 : u1; }
+  } else {
+    // if we can't measure, keep original intended mapping: u2 wide, u1 square
+    wide = u2; square = u1;
+  }
+
   const cta = String(c?.banners?.cta || c?.cta || "").trim();
   return { wide, square, cta };
 }
@@ -1684,9 +1698,14 @@ const fb = await resolveCountryBanners(iso, payload);
     const link2 = wfLink || String(sObj?.link || sObj?.url || "").trim();
     const name2 = wfName || String(sObj?.name || "").trim();
 
-    const hasSponsor = (payload?.sponsor?.active === true) || !!(wideUrl2 || squareUrl2);
-if (hasSponsor) {
+    const hasSponsor = !!(payload?.sponsor?.active || wideUrl2 || squareUrl2 || name2 || link2);
+
+    if (hasSponsor) {
       hideNonSponsorBanners();
+      // reset sizes for sponsor mode
+      try{ if (wideA){ wideA.style.width='100%'; wideA.style.height='120px'; wideA.style.marginTop='12px'; } }catch(_e){}
+      try{ if (logoBox){ logoBox.style.width='100%'; logoBox.style.height='auto'; } }catch(_e){}
+
       // IMPORTANT: if sponsor exists, do NOT show fallback banners
       replaceWideBannerWithImg(wideA, wideUrl2, "");        // no fallback
       replaceSquareWithImg(logoBox, squareUrl2, "");        // no fallback
@@ -1699,6 +1718,12 @@ if (hasSponsor) {
     // 3) Fallback country banners (no sponsor)
 
     showNonSponsorBanners();
+
+    // Non-sponsor banner sizes (requested): wide 260x120, square 300x300
+    try{
+      if (wideA){ wideA.style.width = '260px'; wideA.style.height = '120px'; wideA.style.margin = '12px 0'; }
+      if (logoBox){ logoBox.style.width = '300px'; logoBox.style.height = '300px'; }
+    }catch(_e){}
 
     replaceWideBannerWithImg(wideA, fb.wide, "");
     replaceSquareWithImg(logoBox, fb.square, "");
@@ -1724,7 +1749,6 @@ if (hasSponsor) {
   }
   function renderFAQ(list) {
     let faqCard = cardByTitleId("faq-title");
-    let created = false;
 
     // If template doesn't include a FAQ card, create one (full-code mode)
     if (!faqCard) {
@@ -1746,13 +1770,9 @@ if (hasSponsor) {
       `;
       host.appendChild(wrap);
       faqCard = wrap;
-      created = true;
     }
 
     if (!Array.isArray(list) || list.length === 0) {
-      // No matching FAQs => hide the whole section (avoid showing irrelevant template content)
-      const wrap0 = faqCard.querySelector(".space-y-3");
-      if (wrap0) wrap0.innerHTML = "";
       faqCard.style.display = "none";
       return;
     }
@@ -1897,6 +1917,7 @@ function blocMatches(bloc, slug, iso) {
   // ---------- Boot ----------
   async function boot() {
     const root = ensureRoot();
+    showLoaderOverlay('Chargement de la fiche métier…');
     renderPlaceholder(root);
 
     ensureLink("ulydia-font-outfit", "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap");
@@ -2250,7 +2271,7 @@ function blocMatches(bloc, slug, iso) {
 
     const iso = getISO();
     const slug = getSlug();
-    console.log("[metier-page] v12.9 boot", { iso, slug });
+    console.log("[metier-page] v12.4 boot", { iso, slug });
 
     try { renderShell(root); }
     catch (e) { overlayError("Render shell failed", e); return; }
@@ -2259,8 +2280,6 @@ function blocMatches(bloc, slug, iso) {
     killTemplatePlaceholdersNow();
 
     const payload = await fetchMetierPayload({ iso, slug });
-
-    const lang = String(payload?.lang || payload?.pays?.langue_finale || payload?.pays?.lang || "").trim().toLowerCase();
 
     // Sponsor
     applySponsor({ iso, slug, payload }).catch(e => overlayError("Apply sponsor failed", e));
@@ -2290,7 +2309,31 @@ function blocMatches(bloc, slug, iso) {
       hidePaysCardsByHeader();
     }
 
-    // FAQ (prefer payload, otherwise try dedicated endpoints)
+    
+    function filterFaqList(list){
+      if (!Array.isArray(list)) return [];
+      const S = String(slug||"").trim().toLowerCase();
+      const I = String(iso||"").trim().toUpperCase();
+      return list.filter(it=>{
+        const b = it?.fieldData || it?.fields || it || {};
+        const q = String(b.question || b.q || b["Question"] || "").trim();
+        const a = String(b.answer || b.a || b["Réponse"] || b["Reponse"] || "").trim();
+        if (!q || !a) return false;
+
+        const isoCand = String(
+          b.country_code || b.code_iso || b.iso || b.ISO || b["Code ISO"] || ""
+        ).trim().toUpperCase();
+
+        const slugCand = String(
+          b.job_slug || b.metier_slug || b["metier_slug"] || b["Job slug"] || b["Métier"] || b.metier || b.job || b.slug || ""
+        ).trim().toLowerCase();
+
+        const okIso = !isoCand || isoCand === I;
+        const okSlug = !slugCand || slugCand === S || slugCand.includes(S);
+        return okIso && okSlug;
+      });
+    }
+// FAQ (prefer payload, otherwise try dedicated endpoints)
     let faqList = payload?.faq || payload?.faqs || payload?.FAQ || null;
 
     async function tryFetchFaqs(){
@@ -2315,34 +2358,10 @@ function blocMatches(bloc, slug, iso) {
     if (!Array.isArray(faqList) || faqList.length === 0) {
       faqList = await tryFetchFaqs();
     }
-
-    // ✅ Safety: if Worker returns "all FAQs", filter client-side by (slug, iso, lang)
-    function faqMatches(item){
-      if (!item) return false;
-
-      const iso2 = String(item.iso || item.country_code || item.code_iso || item.country || "").trim().toUpperCase();
-      const lang2 = String(item.lang || item.langue || item.language || "").trim().toLowerCase();
-
-      // We require a job/metier slug match. Otherwise we DO NOT display (prevents "Full-Stack" FAQ everywhere).
-      const s2 = String(
-        item.job_slug || item.metier_slug || item.slug || item.metier || item.job || item.metier_ref || ""
-      ).trim();
-
-      if (!s2) return false;
-
-      // Accept common variations (some sources store full URL or "slug|FR")
-      const s2Norm = s2.replace(/^https?:\/\/[^/]+\//, "").split(/[?#]/)[0].split("|")[0].trim();
-      if (s2Norm !== slug) return false;
-
-      // If iso/lang are present on the FAQ, enforce them
-      if (iso2 && iso2 !== iso) return false;
-      if (lang2 && lang2 !== lang) return false;
-
-      return true;
-    }
-
-    const faqFiltered = Array.isArray(faqList) ? faqList.filter(faqMatches) : [];
-    renderFAQ(faqFiltered);
+    const rawFaqs = Array.isArray(faqList) ? faqList : [];
+    const filteredFaqs = filterFaqList(rawFaqs);
+    renderFAQ(filteredFaqs);
+    try{ hideLoaderOverlay(); }catch(_e){}
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => boot().catch(e => overlayError("Boot failed", e)));
