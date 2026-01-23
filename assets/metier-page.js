@@ -203,40 +203,29 @@ try {
 
 
   function ensureRoot() {
-    // 1) Use existing root if present (BEST)
+    // Prefer the placeholder already present in Webflow
     let root = document.getElementById("ulydia-metier-root");
     if (root) return root;
 
-    // 2) ✅ If template provides a host, create the root INSIDE it (never replace the host itself)
-    // Put data-ulydia-metier-host="1" on an EMPTY div under the Header Wrapper, or on a container that should keep its content.
-    const host = document.querySelector('[data-ulydia-metier-host]');
-    if (host) {
-      root = document.createElement("div");
-      root.id = "ulydia-metier-root";
-      host.appendChild(root);
-      return root;
-    }
-
-    // 3) Fallback: create root AFTER the header wrapper (if possible)
+    // Create it (but insert at the RIGHT place: after Webflow header / inside main)
     root = document.createElement("div");
     root.id = "ulydia-metier-root";
 
-    // Webflow "Header Wrapper" is TWO classes: .Header and .Wrapper
-    const header =
-      document.querySelector(".Header.Wrapper") ||
-      document.querySelector(".header-wrapper") ||
+    const headerEl =
+      document.querySelector("[data-ulydia-header]") ||
       document.querySelector(".w-nav") ||
       document.querySelector("header");
 
-    if (header && header.parentNode) {
-      header.parentNode.insertBefore(root, header.nextSibling);
+    const mainEl =
+      document.querySelector("[data-ulydia-metier-host]") ||
+      document.querySelector("main") ||
+      document.querySelector("[role='main']") ||
+      document.querySelector(".w-dyn-list, .w-dyn-items");
+
+    if (mainEl) {
+      mainEl.appendChild(root);
       return root;
     }
-
-    // 4) Last resort
-    (document.body || document.documentElement).appendChild(root);
-    return root;
-  }
 
     if (headerEl && headerEl.parentNode) {
       headerEl.parentNode.insertBefore(root, headerEl.nextSibling);
