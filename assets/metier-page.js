@@ -232,6 +232,12 @@ try {
   function ensureRoot() {
     // Prefer the placeholder already present in Webflow
     let root = document.getElementById("ulydia-metier-root");
+
+    // ✅ Critical fix: if the root was mistakenly placed in <head>, move it to <body>
+    if (root && root.parentElement && root.parentElement.tagName === "HEAD") {
+      try { document.body.appendChild(root); } catch(_) {}
+    }
+
     if (root) return root;
 
     // If missing, create it but DO NOT prepend (would push Webflow header to the bottom)
@@ -1384,6 +1390,26 @@ try {
     else node.innerHTML = `<p>${formatInlineBold(s).replace(/\n+/g, "<br/>")}</p>`;
   }
 
+  // ---------------------------------------------------------
+  // Country-language availability message
+  // ---------------------------------------------------------
+  function showCountryNotAvailable(lang){
+    const msg = ({
+      en: "Sorry, this job profile is not yet available for this country.",
+      fr: "Désolé, cette fiche métier n’est pas encore disponible pour ce pays.",
+      de: "Dieses Berufsprofil ist für dieses Land noch nicht verfügbar.",
+      es: "Este perfil profesional aún no está disponible para este país.",
+      it: "Questo profilo professionale non è ancora disponibile per questo paese."
+    })[lang] || "Not available.";
+
+    // Hide all content cards except the first one (overview)
+    const ids = ["missions-title","competences-title","environnements-title","profil-title","evolutions-title","faq-title"];
+    ids.forEach(hideCard);
+
+    // Show message inside "Vue d'ensemble"
+    setRich("description-title", `<p>${escapeHtml(msg)}</p>`);
+  }
+
   // ---------- Hide pays-bloc UI by header text (no IDs in template) ----------
   const PAYS_HEADERS = [
     "Indicateurs clés",
@@ -1434,8 +1460,10 @@ try {
   async function fetchMetierPayload({ iso, slug }) {
     if (!slug) return null;
     const url = new URL(`${WORKER_URL}/v1/metier-page`);
-    url.searchParams.set("iso", iso);
+    url.searchParams.set("country", iso);
+    url.searchParams.set("iso", iso); // fallback for older worker versions
     url.searchParams.set("slug", slug);
+    url.searchParams.set("metier", slug); // fallback alias
     url.searchParams.set("proxy_secret", PROXY_SECRET);
     return fetchJSON(url.toString()).catch((e) => {
       console.warn("[metier.v12.4] worker payload failed", e);
@@ -2485,6 +2513,33 @@ function blocMatches(bloc, slug, iso) {
     // Standard metier content
     const m = payload?.metier || payload?.job || payload?.item || payload || null;
     const f = m ? (m.fieldData || m.fields || m) : {};
+
+    // ---------------------------------------------------------
+    // If the visitor country expects EN but content is not available in EN:
+    // show a clear message (in EN) instead of showing FR fallback content.
+    // ---------------------------------------------------------
+    try{
+      const wantsEN = desiredLang === "en";
+      const payloadLang = String(lang || "").trim().toLowerCase();
+
+      const hasEN =
+        !isEmptyRich(f.description_en || f.descriptionEn || f.html_en || f.htmlEn || f.content_en || f.contentEn) ||
+        !isEmptyRich(f.missions_en || f.missionsEn) ||
+        !isEmptyRich(f.competences_en || f.competencesEn || f["Compétences_en"] || f["Competences_en"]) ||
+        !isEmptyRich(f.environnements_en || f.environnementsEn) ||
+        !isEmptyRich(f.profil_recherche_en || f.profilRechercheEn) ||
+        !isEmptyRich(f.evolutions_possibles_en || f.evolutionsPossiblesEn);
+
+      if (wantsEN && payloadLang && payloadLang !== "en" && !hasEN) {
+        // Keep header title, but replace body with the not-available message
+        setText("nom-metier", f.Nom || f.nom || f.title || f.name || slug);
+        setText("accroche-metier", "");
+        showCountryNotAvailable("en");
+        hideLoaderOverlay();
+        return;
+      }
+    } catch(_) {}
+
 
     if (m) {
       setText("nom-metier", f.Nom || f.nom || f.title || f.name || slug);
