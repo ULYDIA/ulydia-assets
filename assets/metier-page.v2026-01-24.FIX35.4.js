@@ -1,6 +1,12 @@
 /* metier-page.js — Ulydia — FIX35.4 (Propal layout without Tailwind + slug matching + hide empty boxes)
 */
 (() => {
+  // 🔒 ANTI DOUBLE / MULTI LOAD — CRITIQUE
+  if (window.__ULYDIA_METIER_PAGE_LOADED__) {
+    console.warn("[metier-page] already loaded, abort");
+    return;
+  }
+  window.__ULYDIA_METIER_PAGE_LOADED__ = true;
   if (window.__ULYDIA_METIER_PAGE_FIX354__) return;
   window.__ULYDIA_METIER_PAGE_FIX354__ = true;
 
