@@ -12,24 +12,13 @@
       - If no matching bloc => nothing from pays-bloc is shown (prevents wrong job data)
    ✅ FAQ: no flicker (hard hidden + cleared, shown only with data)
 */
-window.__METIER_PAGE_BUILD__ = "metier-page v2026-01-24 FIX22 ($ helpers hoisted)";
+window.__METIER_PAGE_BUILD__ = "metier-page v2026-01-23 FIX9 (unified loader + hide CMS sources + FAQ filter by metier)";
 try { console.log("[metier-page]", window.__METIER_PAGE_BUILD__); } catch(e){}
 
 (() => {
-  // =========================================================
-  // DOM helpers (must be defined before any usage)
-  // =========================================================
-  const $ = (sel, root = document) => root.querySelector(sel);
-  const $all = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-  // Version guard: unique per deploy (prevents old crash from blocking new build)
-  const BOOT_VER = "2026-01-24-0905";
-  if (window.__ULYDIA_METIER_BOOT_VER__ === BOOT_VER) {
-    try { document.documentElement.classList.remove("ul-metier-loading"); } catch(_){}
-    try { var r=document.getElementById("ulydia-metier-root"); if (r) r.style.opacity="1"; } catch(_){}
-    try { var f=document.getElementById("ul-metier-fallback-loader"); if (f) f.remove(); } catch(_){}
-    return;
-  }
-  window.__ULYDIA_METIER_BOOT_VER__ = BOOT_VER;
+  // Version guard: allows new deploy to run even if an old script set a generic boot flag
+  if (window.__ULYDIA_METIER_BOOT_VER__ === "2026-01-23-2205") return;
+  window.__ULYDIA_METIER_BOOT_VER__ = "2026-01-23-2205";
   // Keep legacy flag for debugging only (do not block)
   window.__ULYDIA_METIER_BOOT__ = true;
 
@@ -83,7 +72,7 @@ try { console.log("[metier-page]", window.__METIER_PAGE_BUILD__); } catch(e){}
       var st = document.createElement("style");
       st.id = "ul-metier-boot-style";
       st.textContent =
-        'body{opacity:1 !important;}' +'html.ul-metier-loading #ulydia-metier-root{opacity:0 !important;}' +'html.ul-metier-loading .ul-hide-while-loading{opacity:0 !important;}';
+        'body{opacity:1 !important;}' +'html.ul-metier-loading #ulydia-metier-root{opacity:0 !important;}' +'html.ul-metier-loading .ul-hide-while-loading{opacity:0 !important;}' +'.hidden{display:none !important;}';
       document.head.appendChild(st);
     }catch(_){}
   })();
@@ -138,6 +127,8 @@ const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const WORKER_URL   = (window.ULYDIA_WORKER_URL || "https://ulydia-business.contact-871.workers.dev").replace(/\/$/, "");
   const PROXY_SECRET = (window.ULYDIA_PROXY_SECRET || "ulydia_2026_proxy_Y4b364u2wsFsQL");
 
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $all = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
   function ensureLink(id, href) {
     if (document.getElementById(id)) return;
@@ -190,7 +181,7 @@ try {
         box.style.font = "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
         document.body.appendChild(box);
       }
-      box.textContent = `[metier-page.v2026-01-24.FIX22] ${title}\n\n${msg}`;
+      box.textContent = `[metier-page.v12.8] ${title}\n\n${msg}`;
     } catch(_) {}
   }
 
@@ -2847,62 +2838,56 @@ setRich("description-title", f.description || "");
         }
       }catch(_){}
     }
+    // ---------------------------------------------------------
+    // FAQ
+    // Priority:
+    //  1) payload.faq (from Worker API)
+    //  2) Webflow CMS hidden list (.ul-cms-source)
+    // Then filter to the current metier (slug or name)
+    // ---------------------------------------------------------
 
-    // ✅ Safety: if Worker returns "all FAQs", filter client-side by (slug, iso, lang)
+    try {
+      const metierSlug = String(metier?.slug || '').trim();
+      const metierName = String(metier?.name || '').trim();
 
-    // Match FAQ -> current metier (supports either slug or metier name stored in CMS)
-    function faqMatches(item, ctx){
-      const it = item || {};
-      const metierRaw = String(it.metier || "").trim();
-      if (!metierRaw) return false;
+      let faqs = [];
 
-      const pageSlug = String(ctx?.slug || ctx?.metier?.slug || "").trim().toLowerCase();
-      const pageName = String(ctx?.metier?.name || "").trim();
-
-      // normalize: lower, strip accents, keep a-z0-9 and hyphen
-      function slugify(s){
-        return String(s || "")
-          .trim()
-          .toLowerCase()
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .replace(/-+/g, "-");
+      // 1) Worker payload
+      if (Array.isArray(payload?.faq)) {
+        faqs = payload.faq
+          .map(x => ({
+            id: x?.id || x?.slug || '',
+            metier: x?.metier || x?.metier_name || x?.metier_slug || '',
+            question: x?.question || x?.q || '',
+            answer: x?.answer || x?.a || ''
+          }))
+          .filter(x => (x.question && x.answer));
       }
 
-      const metierKey = slugify(metierRaw);
-      const nameKey = slugify(pageName);
+      // 2) CMS hidden list (fallback)
+      if (!faqs.length) {
+        const fromDom = collectFaqsFromDOM();
+        if (Array.isArray(fromDom) && fromDom.length) faqs = fromDom;
+      }
 
-      // exact match
-      if (metierKey && (metierKey === pageSlug || metierKey === nameKey)) return true;
+      // Filter to current metier
+      if (faqs.length) {
+        faqs = faqs.filter(f => faqMatches(f, metierSlug, metierName));
+      }
 
-      // tolerant match (when CMS stores "Nom" and pageSlug is already slugified)
-      if (pageSlug && metierKey && (metierKey.includes(pageSlug) || pageSlug.includes(metierKey))) return true;
-      if (nameKey && metierKey && (metierKey.includes(nameKey) || nameKey.includes(metierKey))) return true;
+      // Sort by ordre if present
+      faqs.sort((a, b) => (Number(a.ordre || 9999) - Number(b.ordre || 9999)));
 
-      return false;
+      renderFAQ(faqs);
+    } catch (e) {
+      log('FAQ render failed', e);
+      // hide FAQ section if it exists
+      try {
+        const sec = document.querySelector('.ul-faq-section');
+        if (sec) sec.style.display = 'none';
+      } catch (_) {}
     }
 
-    // Prefer FAQ provided by the Worker (already filtered & language/country aware)
-    // Fallback to hidden Webflow CMS list (filter here by metier)
-    const faqAll = (Array.isArray(ctx?.faq) && ctx.faq.length)
-      ? ctx.faq
-      : (Array.isArray(window.__ULYDIA_FAQS__) ? window.__ULYDIA_FAQS__ : []);
-
-    // If we still have nothing in memory, try extracting from hidden CMS source (already in renderFAQ)
-    const faqFiltered = (faqAll || []).filter(x => faqMatches(x, ctx));
-
-    // If Worker provided FAQ for this job, do not double-filter (keep order)
-    // But if CMS is used, ensure we only show items that have a question+answer
-    const faqReady = faqFiltered.filter(x => {
-      const q = String(x?.question || x?.q || "").trim();
-      const a = String(x?.answer || x?.a || "").trim();
-      return q && a;
-    });
-
-    renderFAQ(faqReady);
-  
     // Done
     hideLoader();
     try{ document.documentElement.classList.remove('ul-metier-loading'); }catch(_){}
