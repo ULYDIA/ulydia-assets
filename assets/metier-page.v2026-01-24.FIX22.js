@@ -12,17 +12,10 @@
       - If no matching bloc => nothing from pays-bloc is shown (prevents wrong job data)
    ✅ FAQ: no flicker (hard hidden + cleared, shown only with data)
 */
-window.__METIER_PAGE_BUILD__ = "metier-page v2026-01-24 FIX22 ($ helpers hoisted)";
+window.__METIER_PAGE_BUILD__ = "metier-page v2026-01-23 FIX9 (unified loader + hide CMS sources + FAQ filter by metier)";
 try { console.log("[metier-page]", window.__METIER_PAGE_BUILD__); } catch(e){}
 
 (() => {
-  // =========================================================
-  // DOM helpers (must be defined before any usage)
-  // =========================================================
-  const $ = (sel, root = document) => root.querySelector(sel);
-  const $all = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
-
   // Version guard: allows new deploy to run even if an old script set a generic boot flag
   if (window.__ULYDIA_METIER_BOOT_VER__ === "2026-01-23-2205") return;
   window.__ULYDIA_METIER_BOOT_VER__ = "2026-01-23-2205";
@@ -79,7 +72,7 @@ try { console.log("[metier-page]", window.__METIER_PAGE_BUILD__); } catch(e){}
       var st = document.createElement("style");
       st.id = "ul-metier-boot-style";
       st.textContent =
-        'body{opacity:1 !important;}' +'html.ul-metier-loading #ulydia-metier-root{opacity:0 !important;}' +'html.ul-metier-loading .ul-hide-while-loading{opacity:0 !important;}';
+        'body{opacity:1 !important;}' +'html.ul-metier-loading #ulydia-metier-root{opacity:0 !important;}' +'html.ul-metier-loading .ul-hide-while-loading{opacity:0 !important;}' +'.hidden{display:none !important;}';
       document.head.appendChild(st);
     }catch(_){}
   })();
@@ -134,6 +127,8 @@ const ASSETS_BASE = "https://ulydia-assets.pages.dev/assets";
   const WORKER_URL   = (window.ULYDIA_WORKER_URL || "https://ulydia-business.contact-871.workers.dev").replace(/\/$/, "");
   const PROXY_SECRET = (window.ULYDIA_PROXY_SECRET || "ulydia_2026_proxy_Y4b364u2wsFsQL");
 
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $all = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
   function ensureLink(id, href) {
     if (document.getElementById(id)) return;
@@ -186,7 +181,7 @@ try {
         box.style.font = "12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
         document.body.appendChild(box);
       }
-      box.textContent = `[metier-page.v2026-01-24.FIX22] ${title}\n\n${msg}`;
+      box.textContent = `[metier-page.v12.8] ${title}\n\n${msg}`;
     } catch(_) {}
   }
 
@@ -2882,22 +2877,35 @@ setRich("description-title", f.description || "");
 
     // Prefer FAQ provided by the Worker (already filtered & language/country aware)
     // Fallback to hidden Webflow CMS list (filter here by metier)
-    const faqAll = (Array.isArray(ctx?.faq) && ctx.faq.length)
-      ? ctx.faq
-      : (Array.isArray(window.__ULYDIA_FAQS__) ? window.__ULYDIA_FAQS__ : []);
+const metierSlug = String(payload?.metier?.slug || params?.slug || "").trim();
+const metierName = String(payload?.metier?.name || "").trim();
 
-    // If we still have nothing in memory, try extracting from hidden CMS source (already in renderFAQ)
-    const faqFiltered = (faqAll || []).filter(x => faqMatches(x, ctx));
+const faqAll = collectFaqsFromDOM({ max: 2000 }); // safe upper bound
+const faqs = (faqAll || []).filter(f => faqMatchesMetier(f, metierSlug, metierName));
 
-    // If Worker provided FAQ for this job, do not double-filter (keep order)
-    // But if CMS is used, ensure we only show items that have a question+answer
-    const faqReady = faqFiltered.filter(x => {
-      const q = String(x?.question || x?.q || "").trim();
-      const a = String(x?.answer || x?.a || "").trim();
-      return q && a;
+if (DEBUG) {
+  log("faq/cms/all", faqAll?.length || 0);
+  log("faq/cms/matched", faqs?.length || 0, { metierSlug, metierName });
+}
+
+if (faqs.length) {
+  // ensure section exists + render
+  renderFAQ(root, faqs.slice(0, 12));
+  // Make accordion work even without Tailwind "hidden"
+  root.querySelectorAll("[data-faq-answer]").forEach(el => { el.style.display = "none"; });
+  root.querySelectorAll("[data-faq-toggle]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const item = btn.closest("[data-faq-item]");
+      if (!item) return;
+      const ans = item.querySelector("[data-faq-answer]");
+      if (!ans) return;
+      const open = ans.style.display !== "none";
+      // close others
+      root.querySelectorAll("[data-faq-answer]").forEach(x => { x.style.display = "none"; });
+      ans.style.display = open ? "none" : "block";
     });
-
-    renderFAQ(faqReady);
+  });
+}
   
     // Done
     hideLoader();
