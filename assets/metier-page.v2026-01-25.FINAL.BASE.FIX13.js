@@ -427,7 +427,7 @@ function getISO() {
        </svg>
       </div>
       <div class="flex-1"><span class="badge badge-primary">💼 Fiche Métier</span>
-       <h1 id="nom-metier" class="text-5xl font-bold mt-4 mb-3 tracking-tight" style="color: var(--text);">Chargement…</h1>
+       <h1 id="nom-metier" class="text-5xl font-bold mt-4 mb-3 tracking-tight" style="color: var(--text);">Loading…</h1>
        <p id="accroche-metier" class="text-xl" style="color: var(--muted);">Créez des applications web modernes de A à Z, maîtrisez le front-end et le back-end</p>
       </div>
      </div><!-- Sponsor Banner Wide (Centré sous l'accroche) -->
@@ -2515,7 +2515,7 @@ function applyPaysBloc(payload, slug, iso) {
     const root = ensureRoot();
     // Keep page blank + show centered loader
     try{ root.innerHTML = ""; }catch(_){}
-    showLoaderOverlay("Chargement de la fiche métier…");
+    showLoaderOverlay("Loading the job description…");
 
     ensureLink("ulydia-font-outfit", "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap");
     ensureScript("ulydia-tailwind", "https://cdn.tailwindcss.com");
