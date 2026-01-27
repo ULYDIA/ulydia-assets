@@ -102,7 +102,7 @@
     // <div class="card"><div class="card-header pastel-*"><h2 class="section-title">…</h2></div><div class="rich-content">…</div></div>
     var card = el("div", {"class":"card", "data-ulydia-mpb-inserted":"1"});
     // Ensure spacing between cards even if parent doesn't use space-y
-    card.style.marginBottom = "20px";
+    card.style.marginBottom = "32px";
 
     var header = el("div", {"class":"card-header " + (opts.pastelClass || "pastel-purple")});
     var h2 = el("h2", {"class":"section-title"});
@@ -234,7 +234,7 @@
     }
 
     // Insert as SIBLINGS directly in the column (no wrapper)
-    var parent = insertBefore.parentNode;
+    var parent = insertBefore.parentNode.parentNode;
     for (var i=0;i<cards.length;i++){
       parent.insertBefore(cards[i], insertBefore);
     }
