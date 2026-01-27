@@ -7,7 +7,7 @@
   // =========================================================
 
   var I18N = {
-    fr: {
+    en: {
       education_title: "Niveau d’études & diplômes",
       education_local: "Niveau requis (local)",
       education_required: "Niveau requis",
@@ -25,7 +25,7 @@
       soft_skills: "Soft Skills essentiels"
     },
 
-    en: {
+    fr: {
       education_title: "Education & qualifications",
       education_local: "Required level (local)",
       education_required: "Required level",
