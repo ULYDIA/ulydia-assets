@@ -234,10 +234,14 @@
     }
 
     // Insert as SIBLINGS directly in the column (no wrapper)
-    var parent = insertBefore.parentNode.parentNode;
-    for (var i=0;i<cards.length;i++){
-      parent.insertBefore(cards[i], insertBefore);
-    }
+// Insert as siblings of the "Environnements de travail" CARD (not inside it)
+var anchorCard = insertBefore.closest(".card,.u-section-card,.section-card,.u-card,[class*='card']");
+var parent = (anchorCard && anchorCard.parentNode) ? anchorCard.parentNode : insertBefore.parentNode;
+
+for (var i=0;i<cards.length;i++){
+  parent.insertBefore(cards[i], anchorCard || insertBefore);
+}
+
 
     hideSoftSkillsIfEmpty();
     return true;
