@@ -76,4 +76,17 @@
 
   document.addEventListener("DOMContentLoaded", boot);
   window.addEventListener("load", boot);
+
+  /* Disable inner hover effects for Salary grid only */
+.ul-salary-card .ul-salary-row:hover{
+  border-color: var(--border, rgba(226,232,240,1));
+  box-shadow: none;
+  transform: none;
+}
+
+.ul-salary-card .ul-salary-top:hover{
+  box-shadow: none;
+  transform: none;
+}
+
 })();
