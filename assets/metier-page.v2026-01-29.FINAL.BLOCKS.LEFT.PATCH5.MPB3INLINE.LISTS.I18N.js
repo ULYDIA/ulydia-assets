@@ -170,7 +170,8 @@
   font-weight:800;
   line-height:1.2;
   transform:translateY(1px);
-  color:#7c3aed; /* violet Ulydia (tailwind violet-600) */
+  color:var(--ulydia-primary, #7c3aed);
+}
 }
 .ulydia-mpb3-text{flex:1;}
 .ulydia-mpb3-edu{background:linear-gradient(90deg, rgba(145,93,255,.35), rgba(220,205,255,.55));}
