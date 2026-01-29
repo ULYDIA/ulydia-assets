@@ -166,7 +166,12 @@
 .ulydia-mpb3-sub{margin:14px 0 8px; font-size:15px; font-weight:800;}
 .ulydia-mpb3-list{margin:6px 0 8px 0; padding:0; list-style:none; display:grid; gap:6px;}
 .ulydia-mpb3-item{display:flex; gap:10px; align-items:flex-start;}
-.ulydia-mpb3-arrow{font-weight:800; line-height:1.2; transform:translateY(1px);}
+.ulydia-mpb3-arrow{
+  font-weight:800;
+  line-height:1.2;
+  transform:translateY(1px);
+  color:#7c3aed; /* violet Ulydia (tailwind violet-600) */
+}
 .ulydia-mpb3-text{flex:1;}
 .ulydia-mpb3-edu{background:linear-gradient(90deg, rgba(145,93,255,.35), rgba(220,205,255,.55));}
 .ulydia-mpb3-first{background:linear-gradient(90deg, rgba(80,210,255,.30), rgba(200,245,255,.65));}
