@@ -4,6 +4,15 @@ Purpose:
 - Keep the "FIX14 anti-loop" behavior but load the NEW base (FIX15) instead of the deleted FIX13/FIX31 chain.
 - Requires PREHEAD.BLOCKER.PATCH3 to run first (recommended) but works alone too.
 */
+
+(function(){
+  if (!window.ULYDIA_WORKER_URL) {
+    console.error("[ULYDIA] Missing ULYDIA_WORKER_URL");
+    return;
+  }
+})();
+
+
 (function(){
   if (window.__ULYDIA_BASE_FIX16__) return;
   window.__ULYDIA_BASE_FIX16__ = true;
