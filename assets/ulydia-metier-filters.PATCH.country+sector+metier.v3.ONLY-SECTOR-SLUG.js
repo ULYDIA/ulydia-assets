@@ -134,13 +134,12 @@
     return low(job.slug || job.Job_Slug || job.job_slug || job.Slug || job.slug_fr || job.Slug_FR || '');
   }
 
-  function getJobSectorSlug(job){
-    // Prefer explicit slug/id
-    var s = job.sector_slug || job.secteur_slug || job.Secteur_slug || job.Sector_slug || job.Secteur_Slug || job.Sector_Slug || job.Secteur_ID || job.Sector_ID || job.sector_id || job.secteur_id || '';
-    // Sometimes it's an array (Airtable linked records simplified)
-    if (Array.isArray(s)) s = s[0] || '';
-    return low(s);
-  }
+function getJobSectorSlug(job){
+  var s = job.Secteur_slug || job.secteur_slug || job.sector_slug || '';
+  if (Array.isArray(s)) s = s[0] || '';
+  return String(s || '').trim().toLowerCase();
+}
+
 
   function jobCountries(job){
     var a = job.countries || job.pays || job.Pays || job.Pays_de_publication || job.Pays_de_publication_ids || job.country_codes || job.Country_codes || job.country || job.iso || '';
