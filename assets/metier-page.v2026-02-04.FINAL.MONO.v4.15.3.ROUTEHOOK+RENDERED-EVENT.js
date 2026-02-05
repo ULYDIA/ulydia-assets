@@ -3714,7 +3714,7 @@ if (!hadFicheFromDom) {
       return;
     }
     try { await go(); } catch(e){ console.error(e); }
-  }catch(e){ try{ console.error('[ULYDIA] renderPage error', e);}catch(_e){} }
+   }
 
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', main);
