@@ -342,10 +342,12 @@ try{ window.__ULYDIA_normLang__ = normLang; }catch(e){}
   window.__ULYDIA_METIER_PAGE_V29__ = true;
 
   function ulydiaNotifyRendered(){
-    try{
-      try{ sessionStorage.removeItem("ulydia_nav_loading"); }catch(e){}
-      window.dispatchEvent(new CustomEvent("ulydia:metier:rendered"));
-    }catch(e){}
+try{
+  window.dispatchEvent(new CustomEvent("ulydia:metier:rendered"));
+}catch(e){}
+try{
+  sessionStorage.removeItem("ulydia_nav_loading");
+}catch(e){}
   }
 // ---------------------------------------------------------
 // PRE-READERS (DOM -> window arrays) — v4.6.4
