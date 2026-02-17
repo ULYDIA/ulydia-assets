@@ -2144,7 +2144,7 @@ function fetchMetierPageData(metierSlug, iso){
 
       /* Arrow lines (when source content uses standalone arrows) */
       .u-arrowline{display:flex;gap:14px;align-items:flex-start;padding:0;margin:10px 0;background:transparent;border:0;}
-      .u-arrowline-ico{flex:0 0 22px;display:inline-flex;align-items:flex-start;justify-content:center;background:transparent;border:0;width:22px;height:auto;font-size:18px;line-height:1.55;font-weight:900;color:var(--accent);margin-top:0;transform:translateY(.22em);} 
+      .u-arrowline-ico{flex:0 0 22px;display:inline-flex;align-items:flex-start;justify-content:center;background:transparent;border:0;width:22px;height:auto;font-size:18px;line-height:1.55;font-weight:900;color:var(--accent);margin-top:0;transform:translateY(.32em);} 
       .u-arrowline-txt{flex:1 1 auto;font-size:16px;line-height:1.55;color:var(--text);font-weight:650;} .u-arrowline-txt p{margin:0;} .u-arrowline-txt>*:first-child{margin-top:0;} .u-arrowline-txt>*:last-child{margin-bottom:0;}
       .u-arrowinline{font-weight:900;margin-right:10px;display:inline-block;vertical-align:baseline;line-height:1.55;transform:translateY(.12em);}
 
