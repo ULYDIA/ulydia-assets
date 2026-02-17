@@ -2142,11 +2142,64 @@ function fetchMetierPageData(metierSlug, iso){
       .u-mpb-txt{font-size:14px;line-height:1.45;color:var(--text);font-weight:650;}
       .u-mpb-paragraph{font-size:14px;line-height:1.55;color:var(--text);}
 
-      /* Arrow lines (when source content uses standalone arrows) */
-      .u-arrowline{display:flex;gap:14px;align-items:flex-start;padding:0;margin:10px 0;background:transparent;border:0;}
-      .u-arrowline-ico{flex:0 0 22px;display:inline-flex;align-items:flex-start;justify-content:center;background:transparent;border:0;width:22px;height:auto;font-size:18px;line-height:1.55;font-weight:900;color:var(--accent);margin-top:0;transform:translateY(12px);} 
-      .u-arrowline-txt{flex:1 1 auto;font-size:16px;line-height:1.55;color:var(--text);font-weight:650;} .u-arrowline-txt p{margin:0;} .u-arrowline-txt>*:first-child{margin-top:0;} .u-arrowline-txt>*:last-child{margin-bottom:0;}
-      .u-arrowinline{font-weight:900;margin-right:10px;display:inline-block;vertical-align:baseline;line-height:1.55;transform:translateY(.24em);}
+/* Arrow lines (when source content uses standalone arrows) */
+.u-arrowline{
+  display:flex;
+  gap:14px;
+  align-items:flex-start;     /* top align line block */
+  padding:0;
+  margin:10px 0;
+  background:transparent;
+  border:0;
+}
+
+.u-arrowline-ico{
+  flex:0 0 22px;
+  width:22px;
+
+  display:inline-flex;
+  align-items:flex-start;     /* top align inside icon box */
+  justify-content:center;
+
+  background:transparent;
+  border:0;
+
+  font-size:18px;
+  font-weight:900;
+  color:var(--accent);
+
+  /* IMPORTANT: stop fighting with line-height + big translate */
+  line-height:1;              /* <-- key */
+  height:auto;
+
+  /* Align arrow with first text line */
+  margin-top:0.22em;          /* <-- adjust 0.16em..0.28em */
+  transform:none !important;  /* <-- key */
+}
+
+.u-arrowline-txt{
+  flex:1 1 auto;
+  font-size:16px;
+  line-height:1.55;
+  color:var(--text);
+  font-weight:650;
+}
+
+.u-arrowline-txt p{ margin:0; }
+.u-arrowline-txt>*:first-child{ margin-top:0; }
+.u-arrowline-txt>*:last-child{ margin-bottom:0; }
+
+/* Arrow inline (→ inside a sentence) */
+.u-arrowinline{
+  font-weight:900;
+  margin-right:10px;
+  display:inline-block;
+  vertical-align:baseline;
+  line-height:1;
+  transform:none !important;
+  position:relative;
+  top:0.12em;                 /* <-- adjust 0.08em..0.16em */
+}
 
       /* Make rich lists look like icon lists in MPB sections */
       .card[data-section="training"] .rich-content ul,
